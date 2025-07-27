@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "pill-panic-temp",
-    "slug": "pill-panic-temp",
+    "name": "Pill Panic",
+    "slug": "pill-panic",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
@@ -13,14 +13,16 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.pillpanic.game"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.pillpanic.game"
     },
     "web": {
       "favicon": "./assets/favicon.png"
