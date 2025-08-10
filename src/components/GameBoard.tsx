@@ -194,22 +194,16 @@ export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, gameE
             // Different border styles for joined vs split pills
             isUserControllable = (pill as any).isUserControllable !== false;
             
-            // Check if this pill is currently selected by touch
-            const selectedPill = gameEngine.getSelectedPill();
-            const isSelectedPill = selectedPill === pill;
-            
-            if (isSelectedPill && isUserControllable) {
-              borderColor = theme.colors.warning; // Selected controllable pill (both joined and split)
-            } else if (isJoinedPill) {
+            // Different border styles for joined vs split pills
+            if (isJoinedPill) {
               borderColor = 'rgba(255,255,255,0.6)'; // Joined pills
             } else {
               borderColor = 'rgba(200,200,255,0.5)'; // Split pills (slightly blue tint to distinguish from joined)
             }
-            isActivePill = isSelectedPill && isUserControllable;
+            isActivePill = false; // No selection system anymore
             break;
           }
         }
-        if (isActivePill) break;
       }
     }
     
