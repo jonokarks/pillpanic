@@ -194,13 +194,18 @@ export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, gameE
             // Different border styles for joined vs split pills
             isUserControllable = (pill as any).isUserControllable !== false;
             
-            // Different border styles for joined vs split pills
-            if (isJoinedPill) {
+            // Check if this pill is currently selected
+            const selectedPill = gameEngine.getSelectedPill();
+            const isSelectedPill = selectedPill === pill;
+            
+            if (isSelectedPill && isUserControllable) {
+              borderColor = theme.colors.warning; // Selected controllable pill (bright highlight)
+              isActivePill = true;
+            } else if (isJoinedPill) {
               borderColor = 'rgba(255,255,255,0.6)'; // Joined pills
             } else {
-              borderColor = 'rgba(200,200,255,0.5)'; // Split pills (slightly blue tint to distinguish from joined)
+              borderColor = 'rgba(200,200,255,0.5)'; // Split pills (slightly blue tint)
             }
-            isActivePill = false; // No selection system anymore
             break;
           }
         }
@@ -235,9 +240,19 @@ export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, gameE
         isJoinedPill={isJoinedPill}
         isUserControllable={isUserControllable}
         onPress={isUserControllable && !isEmpty ? () => {
-          // Single tap - immediately rotate the pill
-          gameEngine.tapToRotate(x, y);
-        } : undefined}
+          // Single tap - select the pill (and rotate as secondary action)
+          const wasSelected = gameEngine.selectPillAt(x, y);
+          if (wasSelected) {
+            // If pill was successfully selected, also rotate it
+            gameEngine.tapToRotate(x, y);
+          }
+        } : !isEmpty ? () => {
+          // Tap on non-controllable cell - deselect any selected pill
+          gameEngine.deselectPill();
+        } : () => {
+          // Tap on empty cell - deselect any selected pill
+          gameEngine.deselectPill();
+        }}
       />
     );
   };

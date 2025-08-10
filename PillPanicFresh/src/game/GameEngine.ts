@@ -10,6 +10,7 @@ export class GameEngine {
   private board: Board;
   private matchingSystem: MatchingSystem;
   private fallingPills: Controllable[] = [];
+  private selectedPill: Controllable | null = null; // Track individually selected pill
   private nextPill: Pill | null = null;
   private gameState: GameState = GameState.MENU;
   private stats: GameStats = {
@@ -62,6 +63,7 @@ export class GameEngine {
     this.generateViruses(level);
     this.stats.virusCount = this.board.countViruses();
     this.fallingPills = [];
+    this.selectedPill = null; // Clear any previous selection
     this.nextPill = Pill.generateRandomPill();
     // Set base speed based on speed setting
     this.baseFallSpeed = BASE_FALL_SPEEDS[speedSetting];
@@ -182,14 +184,19 @@ export class GameEngine {
     
     this.lastFallTime += timestep;
     
-    if (this.lastFallTime >= this.currentFallSpeed) {
+    // Check if it's time for normal gravity
+    const normalGravityTime = this.lastFallTime >= this.currentFallSpeed;
+    
+    if (normalGravityTime) {
       this.lastFallTime = 0;
-      this.applyGravityToAllPills();
     }
+    
+    // Apply gravity to all pills, but at different speeds for fast-drop pills
+    this.applyGravityWithIndividualSpeeds(timestep, normalGravityTime);
   }
 
-  private applyGravityToAllPills(): void {
-    // Apply gravity to all falling pills simultaneously
+  private applyGravityWithIndividualSpeeds(timestep: number, normalGravityTime: boolean): void {
+    // Apply gravity to all falling pills with individual timing
     let falllingCount = 0;
     let placedCount = 0;
     
@@ -197,21 +204,27 @@ export class GameEngine {
       const pill = this.fallingPills[i];
       if (!pill || !pill.isActive) continue;
       
-      // Don't skip any pills - let gravity apply to all
+      // Check if this pill should fall this frame
+      const isFastDropPill = (pill as any).fastDrop === true;
+      const shouldFall = isFastDropPill || normalGravityTime;
       
-      // Check if pill can move down
-      if (pill.canMove(this.board, 0, 1)) {
+      if (shouldFall && pill.canMove(this.board, 0, 1)) {
         pill.move(0, 1);
         falllingCount++;
-        console.log(`Gravity applied to pill ${i} at (${pill.position.x}, ${pill.position.y})`);
-      } else {
+        console.log(`Gravity applied to pill ${i} at (${pill.position.x}, ${pill.position.y})${isFastDropPill ? ' [FAST]' : ''}`);
+      } else if (!pill.canMove(this.board, 0, 1)) {
         // Pill can't move down, place it
         console.log(`Placing pill ${i} at (${pill.position.x}, ${pill.position.y})`);
         pill.place(this.board);
         this.fallingPills.splice(i, 1);
         placedCount++;
         
-        // Increment capsule counter for speed progression (classic Dr. Mario behavior)
+        // Clear selection if this pill was selected
+        if (pill === this.selectedPill) {
+          this.selectedPill = null;
+        }
+        
+        // Increment capsule counter for speed progression
         this.stats.capsulesPlaced++;
         this.updateSpeed();
       }
@@ -229,12 +242,40 @@ export class GameEngine {
     }
   }
 
-  // Keyboard/gesture movement - works with the currently falling pill
+
+  // Find the best pill for gesture control (lowest/most advanced pill)
+  private findBestPillForGesture(): Controllable | null {
+    const controllablePills = this.fallingPills.filter(pill => pill.isActive && pill.isUserControllable);
+    if (controllablePills.length === 0) return null;
+    
+    // Find the lowest (most advanced) pill
+    let bestPill = controllablePills[0];
+    let lowestY = bestPill.position.y;
+    
+    for (const pill of controllablePills) {
+      if (pill.position.y > lowestY) {
+        lowestY = pill.position.y;
+        bestPill = pill;
+      }
+    }
+    
+    return bestPill;
+  }
+
+  // Keyboard/gesture movement - works with selected pill or auto-selects appropriate pill
   movePill(direction: Direction): void {
     if (this.fallingPills.length === 0 || this.gameState !== GameState.PLAYING) return;
     
-    // Get the first active controllable pill
-    const currentPill = this.fallingPills.find(pill => pill.isActive && pill.isUserControllable);
+    // Use selected pill if available, otherwise auto-select the lowest controllable pill
+    let currentPill = this.selectedPill;
+    if (!currentPill || !this.fallingPills.includes(currentPill)) {
+      // Auto-select the lowest (most advanced) controllable pill for gestures
+      currentPill = this.findBestPillForGesture();
+      if (currentPill) {
+        this.selectPill(currentPill);
+      }
+    }
+    
     if (!currentPill) return;
     
     let dx = 0, dy = 0;
@@ -260,12 +301,19 @@ export class GameEngine {
     }
   }
 
-  // Keyboard/gesture rotation - works with the currently falling pill
+  // Keyboard/gesture rotation - works with selected pill or auto-selects appropriate pill  
   rotatePill(): void {
     if (this.fallingPills.length === 0 || this.gameState !== GameState.PLAYING) return;
     
-    // Get the first active controllable pill
-    const currentPill = this.fallingPills.find(pill => pill.isActive && pill.isUserControllable);
+    // Use selected pill if available, otherwise auto-select the best pill for gestures
+    let currentPill = this.selectedPill;
+    if (!currentPill || !this.fallingPills.includes(currentPill)) {
+      currentPill = this.findBestPillForGesture();
+      if (currentPill) {
+        this.selectPill(currentPill);
+      }
+    }
+    
     if (!currentPill) return;
     
     // Only rotate regular pills, not single pills
@@ -277,12 +325,19 @@ export class GameEngine {
     }
   }
 
-  // Drop pill instantly to bottom
+  // Drop selected pill instantly to bottom
   dropPill(): void {
     if (this.fallingPills.length === 0 || this.gameState !== GameState.PLAYING) return;
     
-    // Get the first active controllable pill
-    const currentPill = this.fallingPills.find(pill => pill.isActive && pill.isUserControllable);
+    // Use selected pill if available, otherwise auto-select the best pill for gestures
+    let currentPill = this.selectedPill;
+    if (!currentPill || !this.fallingPills.includes(currentPill)) {
+      currentPill = this.findBestPillForGesture();
+      if (currentPill) {
+        this.selectPill(currentPill);
+      }
+    }
+    
     if (!currentPill) return;
     
     // Move down until can't move anymore
@@ -395,8 +450,21 @@ export class GameEngine {
     }
   }
 
+  // Set fast drop for selected pill only (individual control)
   setFastDrop(fast: boolean): void {
-    this.currentFallSpeed = fast ? FAST_FALL_SPEED : this.getProgressiveSpeed();
+    if (this.selectedPill && this.fallingPills.includes(this.selectedPill)) {
+      // Apply fast drop to selected pill by giving it a custom fall speed
+      (this.selectedPill as any).fastDrop = fast;
+      console.log(`Fast drop ${fast ? 'enabled' : 'disabled'} for selected pill at (${this.selectedPill.position.x}, ${this.selectedPill.position.y})`);
+    } else if (fast) {
+      // If no pill selected but fast drop requested, auto-select and apply
+      const bestPill = this.findBestPillForGesture();
+      if (bestPill) {
+        this.selectPill(bestPill);
+        (bestPill as any).fastDrop = true;
+        console.log(`Auto-selected pill for fast drop at (${bestPill.position.x}, ${bestPill.position.y})`);
+      }
+    }
   }
 
   private updateSpeed(): void {
@@ -484,6 +552,42 @@ export class GameEngine {
   }
 
 
+
+  // Select a pill for individual control
+  selectPill(pill: Controllable | null): boolean {
+    if (pill && this.fallingPills.includes(pill)) {
+      this.selectedPill = pill;
+      console.log(`Selected pill at (${pill.position.x}, ${pill.position.y})`);
+      this.notifyBoardChange(); // Update UI to show selection
+      return true;
+    }
+    return false;
+  }
+
+  // Deselect the currently selected pill
+  deselectPill(): void {
+    if (this.selectedPill) {
+      console.log(`Deselected pill at (${this.selectedPill.position.x}, ${this.selectedPill.position.y})`);
+      this.selectedPill = null;
+      this.notifyBoardChange(); // Update UI to hide selection
+    }
+  }
+
+  // Get the currently selected pill
+  getSelectedPill(): Controllable | null {
+    return this.selectedPill;
+  }
+
+  // Select pill at board position for touch-based control
+  selectPillAt(boardX: number, boardY: number): boolean {
+    const pill = this.findPillAt(boardX, boardY);
+    if (pill) {
+      return this.selectPill(pill);
+    } else {
+      this.deselectPill(); // Deselect if tapping empty space
+    }
+    return false;
+  }
 
   // Tap to rotate pill at position  
   tapToRotate(boardX: number, boardY: number): boolean {
