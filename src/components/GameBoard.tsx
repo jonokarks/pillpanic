@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
-import { View, StyleSheet } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { View, StyleSheet, Platform, TouchableOpacity } from 'react-native';
+import LinearGradient from 'react-native-linear-gradient';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -10,6 +10,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Board } from '../game/entities/Board';
 import { Controllable } from '../game/utils/types';
+import { GameEngine } from '../game/GameEngine';
 import { 
   BOARD_WIDTH, 
   BOARD_HEIGHT, 
@@ -22,10 +23,12 @@ import {
 } from '../game/utils/constants';
 import { theme } from '../utils/theme';
 
+const isWeb = Platform.OS === 'web';
+
 interface GameBoardProps {
   board: Board;
   fallingPills: Controllable[];
-  activePillIndex: number;
+  gameEngine: GameEngine;
 }
 
 interface CellProps {
@@ -37,6 +40,10 @@ interface CellProps {
   isVirus: boolean;
   isActive: boolean;
   isEmpty: boolean;
+  isJoinedPill?: boolean;
+  isUserControllable?: boolean;
+  onPress?: () => void;
+  onLongPress?: () => void;
 }
 
 const AnimatedCell: React.FC<CellProps> = ({ 
@@ -45,7 +52,11 @@ const AnimatedCell: React.FC<CellProps> = ({
   borderColor, 
   isVirus, 
   isActive,
-  isEmpty 
+  isEmpty,
+  isJoinedPill = false,
+  isUserControllable = true,
+  onPress,
+  onLongPress
 }) => {
   const scale = useSharedValue(isEmpty ? 1 : 0);
   const glow = useSharedValue(0);
@@ -75,13 +86,15 @@ const AnimatedCell: React.FC<CellProps> = ({
     );
   }
 
-  return (
+  const cellContent = (
     <Animated.View 
       style={[
         styles.cell,
         animatedStyle,
         isActive && styles.activeCellShadow,
-        { borderColor }
+        { borderColor },
+        // Different border radius for split pills to make them appear more individual
+        !isJoinedPill && !isVirus && { borderRadius: theme.borderRadius.sm * 1.5 }
       ]}
     >
       {gradientColors ? (
@@ -90,6 +103,7 @@ const AnimatedCell: React.FC<CellProps> = ({
           style={[
             styles.cellContent,
             isVirus && styles.virusCell,
+            // No dimming needed since all pills are now controllable
           ]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
@@ -100,14 +114,31 @@ const AnimatedCell: React.FC<CellProps> = ({
             styles.cellContent,
             { backgroundColor },
             isVirus && styles.virusCell,
+            // No dimming needed since all pills are now controllable
           ]}
         />
       )}
     </Animated.View>
   );
+
+  // Make controllable pills touchable
+  if (isUserControllable && (onPress || onLongPress)) {
+    return (
+      <TouchableOpacity 
+        onPress={onPress} 
+        onLongPress={onLongPress}
+        activeOpacity={0.8}
+        delayLongPress={500}
+      >
+        {cellContent}
+      </TouchableOpacity>
+    );
+  }
+
+  return cellContent;
 };
 
-export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, activePillIndex }) => {
+export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, gameEngine }) => {
   const boardScale = useSharedValue(0.95);
 
   useEffect(() => {
@@ -118,6 +149,11 @@ export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, activ
     transform: [{ scale: boardScale.value }],
   }));
 
+  // Tap to rotate pills only - movement handled by GameControls gestures
+  const handleCellTap = (x: number, y: number) => {
+    gameEngine.tapToRotate(x, y);
+  };
+
   const renderCell = (x: number, y: number) => {
     const cell = board.getCell(x, y);
     let backgroundColor = theme.colors.cellEmpty;
@@ -126,6 +162,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, activ
     let isActivePill = false;
     let isVirus = false;
     let isEmpty = true;
+    let isJoinedPill = false;
+    let isUserControllable = true;
     
     // Check if this position is occupied by any falling pill
     for (let i = 0; i < fallingPills.length; i++) {
@@ -138,27 +176,36 @@ export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, activ
           if (pos.x === x && pos.y === y) {
             isEmpty = false;
             // Handle different pill types
-            if ('colors' in pill) {
-              // Regular pill with colors array
-              const color = pill.colors[j] as Color;
+            if ('colors' in pill && Array.isArray((pill as any).colors)) {
+              // Regular pill with colors array (joined pill)
+              const pillColors = (pill as any).colors as Color[];
+              const color = pillColors[j];
               backgroundColor = COLOR_VALUES[color];
               gradientColors = COLOR_GRADIENTS[color];
-            } else if ('pieces' in pill) {
-              // Split group - find the specific piece at this position
-              const splitGroup = pill as any;
-              const piece = splitGroup.pieces.find((p: any) => p.position.x === x && p.position.y === y);
-              if (piece) {
-                backgroundColor = COLOR_VALUES[piece.color];
-                gradientColors = COLOR_GRADIENTS[piece.color];
-              }
+              isJoinedPill = true;
             } else {
-              // Single pill
+              // Single pill (split pill)
               const color = (pill as any).color as Color;
               backgroundColor = COLOR_VALUES[color];
               gradientColors = COLOR_GRADIENTS[color];
+              isJoinedPill = false;
             }
-            borderColor = i === activePillIndex ? theme.colors.warning : 'rgba(255,255,255,0.3)';
-            isActivePill = i === activePillIndex;
+            
+            // Different border styles for joined vs split pills
+            isUserControllable = (pill as any).isUserControllable !== false;
+            
+            // Check if this pill is currently selected by touch
+            const selectedPill = gameEngine.getSelectedPill();
+            const isSelectedPill = selectedPill === pill;
+            
+            if (isSelectedPill && isUserControllable) {
+              borderColor = theme.colors.warning; // Selected controllable pill (both joined and split)
+            } else if (isJoinedPill) {
+              borderColor = 'rgba(255,255,255,0.6)'; // Joined pills
+            } else {
+              borderColor = 'rgba(200,200,255,0.5)'; // Split pills (slightly blue tint to distinguish from joined)
+            }
+            isActivePill = isSelectedPill && isUserControllable;
             break;
           }
         }
@@ -191,6 +238,12 @@ export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, activ
         isVirus={isVirus}
         isActive={isActivePill}
         isEmpty={isEmpty}
+        isJoinedPill={isJoinedPill}
+        isUserControllable={isUserControllable}
+        onPress={isUserControllable && !isEmpty ? () => {
+          // Single tap - immediately rotate the pill
+          gameEngine.tapToRotate(x, y);
+        } : undefined}
       />
     );
   };
@@ -219,22 +272,29 @@ const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
     justifyContent: 'center',
+    flex: isWeb ? 0 : 1, // Don't take full height on web
   },
   boardWrapper: {
     borderRadius: theme.borderRadius.lg,
     ...theme.shadows.lg,
+    // Add extra spacing on desktop
+    marginHorizontal: isWeb ? 20 : 0,
+    marginVertical: isWeb ? 10 : 0,
   },
   boardBackground: {
     borderRadius: theme.borderRadius.lg,
-    padding: 8,
-    borderWidth: 2,
+    padding: isWeb ? 12 : 8, // More padding on desktop
+    borderWidth: isWeb ? 3 : 2, // Thicker border on desktop
     borderColor: theme.colors.boardBorder,
     backgroundColor: theme.colors.boardBackground,
   },
   board: {
     backgroundColor: 'rgba(0,0,0,0.3)',
     borderRadius: theme.borderRadius.md,
-    padding: 4,
+    padding: isWeb ? 6 : 4, // More padding on desktop
+    ...(isWeb ? {
+      userSelect: 'none',
+    } : {}),
   },
   row: {
     flexDirection: 'row',
@@ -242,8 +302,8 @@ const styles = StyleSheet.create({
   cell: {
     width: CELL_SIZE,
     height: CELL_SIZE,
-    borderWidth: 1,
-    margin: 1,
+    borderWidth: isWeb ? 1.5 : 1, // Slightly thicker borders on desktop
+    margin: isWeb ? 1.5 : 1, // More spacing on desktop
     borderRadius: theme.borderRadius.sm,
     overflow: 'hidden',
   },
@@ -260,7 +320,7 @@ const styles = StyleSheet.create({
   activeCellShadow: {
     shadowColor: theme.colors.warning,
     shadowOffset: { width: 0, height: 0 },
-    shadowRadius: 8,
-    elevation: 8,
+    shadowRadius: isWeb ? 12 : 8, // More glow on desktop
+    elevation: isWeb ? 12 : 8,
   },
 });
