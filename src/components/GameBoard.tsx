@@ -7,7 +7,9 @@ import Animated, {
   withSpring,
   withTiming,
   interpolate,
+  runOnJS,
 } from 'react-native-reanimated';
+import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { Board } from '../game/entities/Board';
 import { Controllable } from '../game/utils/types';
 import { GameEngine } from '../game/GameEngine';
@@ -24,6 +26,10 @@ import {
 import { theme } from '../utils/theme';
 
 const isWeb = Platform.OS === 'web';
+
+// Dr. Kawashima-style drag constants
+const DRAG_THRESHOLD = 15; // Minimum drag distance to trigger movement
+const DRAG_SENSITIVITY = 0.5; // How responsive the dragging feels
 
 interface GameBoardProps {
   board: Board;
@@ -44,6 +50,11 @@ interface CellProps {
   isUserControllable?: boolean;
   onPress?: () => void;
   onLongPress?: () => void;
+}
+
+interface DraggableCellProps extends CellProps {
+  gameEngine: GameEngine;
+  pill: Controllable;
 }
 
 const AnimatedCell: React.FC<CellProps> = ({ 
@@ -138,6 +149,109 @@ const AnimatedCell: React.FC<CellProps> = ({
   return cellContent;
 };
 
+// Dr. Kawashima-style draggable pill cell with smooth real-time movement
+const DraggablePillCell: React.FC<DraggableCellProps> = ({ 
+  x, y, backgroundColor, gradientColors, borderColor, isVirus, isActive, isEmpty, 
+  isJoinedPill = false, isUserControllable = true, gameEngine, pill 
+}) => {
+  const dragX = useSharedValue(0);
+  const dragY = useSharedValue(0);
+  const scale = useSharedValue(1);
+  const isDragging = useSharedValue(false);
+
+  const selectPill = () => {
+    'worklet';
+    runOnJS(gameEngine.selectPillAt.bind(gameEngine))(x, y);
+  };
+
+  const movePillToPosition = (newX: number, newY: number) => {
+    'worklet';
+    // Convert screen coordinates to board movements
+    const deltaX = Math.round(newX / CELL_SIZE);
+    const deltaY = Math.round(newY / CELL_SIZE);
+    
+    if (Math.abs(deltaX) >= 1) {
+      if (deltaX > 0) {
+        runOnJS(gameEngine.movePill.bind(gameEngine))(Direction.RIGHT);
+      } else {
+        runOnJS(gameEngine.movePill.bind(gameEngine))(Direction.LEFT);
+      }
+    }
+    
+    if (deltaY >= 1) {
+      runOnJS(gameEngine.setFastDrop.bind(gameEngine))(true);
+    }
+  };
+
+  const handleGesture = (event: any) => {
+    'worklet';
+    const { state, translationX, translationY } = event.nativeEvent;
+
+    if (state === State.BEGAN) {
+      selectPill();
+      isDragging.value = true;
+      scale.value = withSpring(1.1); // Slight scale up when grabbed
+    } else if (state === State.ACTIVE) {
+      // Smooth real-time following
+      dragX.value = translationX * DRAG_SENSITIVITY;
+      dragY.value = translationY * DRAG_SENSITIVITY;
+      
+      // Trigger movements when dragging far enough
+      if (Math.abs(translationX) > DRAG_THRESHOLD || Math.abs(translationY) > DRAG_THRESHOLD) {
+        movePillToPosition(translationX, translationY);
+      }
+    } else if (state === State.END) {
+      isDragging.value = false;
+      scale.value = withSpring(1); // Return to normal size
+      // Smooth return to grid position
+      dragX.value = withSpring(0);
+      dragY.value = withSpring(0);
+      runOnJS(gameEngine.setFastDrop.bind(gameEngine))(false);
+    }
+  };
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: dragX.value },
+      { translateY: dragY.value },
+      { scale: scale.value }
+    ],
+    zIndex: isDragging.value ? 10 : 1, // Bring dragged pills to front
+  }));
+
+  // Create the pill content (same as AnimatedCell but with drag animation)
+  const pillContent = (
+    <Animated.View 
+      style={[
+        styles.cell,
+        animatedStyle,
+        isActive && styles.activeCellShadow,
+        { borderColor },
+        !isJoinedPill && !isVirus && { borderRadius: theme.borderRadius.sm * 1.5 }
+      ]}
+    >
+      {gradientColors ? (
+        <LinearGradient
+          colors={gradientColors}
+          style={[styles.cellContent, isVirus && styles.virusCell]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+        />
+      ) : (
+        <View style={[styles.cellContent, { backgroundColor }, isVirus && styles.virusCell]} />
+      )}
+    </Animated.View>
+  );
+
+  return (
+    <PanGestureHandler onGestureEvent={handleGesture} onHandlerStateChange={handleGesture}>
+      <Animated.View>
+        {pillContent}
+      </Animated.View>
+    </PanGestureHandler>
+  );
+};
+
 export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, gameEngine }) => {
   const boardScale = useSharedValue(0.95);
 
@@ -166,6 +280,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, gameE
     let isUserControllable = true;
     
     // Check if this position is occupied by any falling pill
+    let currentPill: Controllable | null = null;
     for (let i = 0; i < fallingPills.length; i++) {
       const pill = fallingPills[i];
       if (pill.isActive) {
@@ -175,6 +290,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, gameE
           const pos = pillPositions[j];
           if (pos.x === x && pos.y === y) {
             isEmpty = false;
+            currentPill = pill;
             // Handle different pill types
             if ('colors' in pill && Array.isArray((pill as any).colors)) {
               // Regular pill with colors array (joined pill)
@@ -226,6 +342,27 @@ export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, gameE
       }
     }
     
+    // Use DraggablePillCell for controllable pills, regular AnimatedCell for others
+    if (isUserControllable && !isEmpty && currentPill) {
+      return (
+        <DraggablePillCell
+          key={`${x}-${y}-drag`}
+          x={x}
+          y={y}
+          backgroundColor={backgroundColor}
+          gradientColors={gradientColors}
+          borderColor={borderColor}
+          isVirus={isVirus}
+          isActive={isActivePill}
+          isEmpty={isEmpty}
+          isJoinedPill={isJoinedPill}
+          isUserControllable={isUserControllable}
+          gameEngine={gameEngine}
+          pill={currentPill}
+        />
+      );
+    }
+
     return (
       <AnimatedCell
         key={`${x}-${y}`}
@@ -239,14 +376,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, gameE
         isEmpty={isEmpty}
         isJoinedPill={isJoinedPill}
         isUserControllable={isUserControllable}
-        onPress={isUserControllable && !isEmpty ? () => {
-          // Single tap - select the pill (and rotate as secondary action)
-          const wasSelected = gameEngine.selectPillAt(x, y);
-          if (wasSelected) {
-            // If pill was successfully selected, also rotate it
-            gameEngine.tapToRotate(x, y);
-          }
-        } : !isEmpty ? () => {
+        onPress={!isEmpty ? () => {
           // Tap on non-controllable cell - deselect any selected pill
           gameEngine.deselectPill();
         } : () => {
