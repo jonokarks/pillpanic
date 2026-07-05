@@ -103,41 +103,7 @@ export const GameControls: React.FC<GameControlsProps> = ({ gameEngine, children
     <GestureHandlerRootView style={styles.container}>
       <View style={styles.container}>
         {children}
-          
-          {/* Mobile control buttons */}
-          {Platform.OS !== 'web' && (
-            <View style={styles.mobileControls}>
-              <View style={styles.controlRow}>
-                <TouchableOpacity
-                  style={styles.controlButton}
-                  onPress={() => gameEngine.movePill(Direction.LEFT)}
-                >
-                  <Text style={styles.controlText}>←</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.controlButton}
-                  onPress={() => gameEngine.rotatePill()}
-                >
-                  <Text style={styles.controlText}>↻</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.controlButton}
-                  onPress={() => gameEngine.movePill(Direction.RIGHT)}
-                >
-                  <Text style={styles.controlText}>→</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={styles.controlRow}>
-                <TouchableOpacity
-                  style={[styles.controlButton, styles.dropButton]}
-                  onPress={() => gameEngine.dropPill()}
-                >
-                  <Text style={styles.controlText}>DROP</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-        </View>
+      </View>
     </GestureHandlerRootView>
   );
 };

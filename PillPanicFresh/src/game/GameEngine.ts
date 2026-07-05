@@ -2,15 +2,43 @@ import { Board } from './entities/Board';
 import { Pill } from './entities/Pill';
 import { SinglePill } from './entities/SinglePill';
 import { MatchingSystem } from './systems/MatchingSystem';
-import { GameState, Direction, BASE_FALL_SPEEDS, FAST_FALL_SPEED, Color, getVirusCount, SPEED_INCREASE_INTERVAL, MAX_SPEED_INCREASES, SPEED_INCREASE_FACTOR, BOARD_WIDTH } from './utils/constants';
-import { GameStats, Virus, Controllable, SpeedSetting } from './utils/types';
+import {
+  GameState,
+  Direction,
+  BASE_FALL_SPEEDS,
+  FAST_FALL_SPEED,
+  Color,
+  CellType,
+  getVirusCount,
+  SPEED_INCREASE_INTERVAL,
+  MAX_SPEED_INCREASES,
+  SPEED_INCREASE_FACTOR,
+  BOARD_WIDTH,
+  BOARD_HEIGHT,
+  SPAWN_GAP_ROWS,
+  SPAWN_COOLDOWN_MS,
+  CONCURRENT_PILL_THRESHOLDS,
+  MAX_CONCURRENT_PILLS,
+  GROUNDED_RELEASE_LOCK,
+  SPAWN_X,
+} from './utils/constants';
+import { GameStats, Virus, Controllable, SpeedSetting, Position } from './utils/types';
 import { SoundManager } from '../utils/SoundManager';
 
+// Germ Buster (Virus Buster) style engine:
+// - capsules drift down smoothly and continuously
+// - the player grabs any falling piece with a finger; a held piece stops
+//   falling and follows the finger left/right/down (never up)
+// - tapping a capsule rotates it
+// - new capsules keep entering while others are still falling, ramping from
+//   1 to 3 simultaneous capsules the longer the game goes
+// - after a clear, unsupported pieces (including half capsules) become
+//   slow-falling entities the player can steer into place for combos
 export class GameEngine {
   private board: Board;
   private matchingSystem: MatchingSystem;
   private fallingPills: Controllable[] = [];
-  private selectedPill: Controllable | null = null; // Track individually selected pill
+  private selectedPill: Controllable | null = null;
   private nextPill: Pill | null = null;
   private gameState: GameState = GameState.MENU;
   private stats: GameStats = {
@@ -22,9 +50,11 @@ export class GameEngine {
     currentSpeedLevel: 0,
     speedSetting: SpeedSetting.MEDIUM,
   };
-  private lastFallTime: number = 0;
   private baseFallSpeed: number = BASE_FALL_SPEEDS.MEDIUM;
   private currentFallSpeed: number = BASE_FALL_SPEEDS.MEDIUM;
+  private spawnCooldown: number = 0;
+  private combo: number = 0;
+  private grabStart: Position | null = null;
   private onStateChange?: (state: GameState) => void;
   private onStatsChange?: (stats: GameStats) => void;
   private onBoardChange?: () => void;
@@ -63,15 +93,16 @@ export class GameEngine {
     this.generateViruses(level);
     this.stats.virusCount = this.board.countViruses();
     this.fallingPills = [];
-    this.selectedPill = null; // Clear any previous selection
+    this.selectedPill = null;
+    this.grabStart = null;
+    this.combo = 0;
     this.nextPill = Pill.generateRandomPill();
-    // Set base speed based on speed setting
     this.baseFallSpeed = BASE_FALL_SPEEDS[speedSetting];
     this.currentFallSpeed = this.baseFallSpeed;
-    this.lastFallTime = 0;
+    this.spawnCooldown = 0;
     this.accumulator = 0;
     this.changeState(GameState.PLAYING);
-    this.spawnNextPill();
+    this.trySpawnPill();
     this.notifyStatsChange();
   }
 
@@ -79,21 +110,19 @@ export class GameEngine {
     const virusCount = getVirusCount(level);
     const viruses: Virus[] = [];
     const colors = Object.values(Color);
-    console.log(`🦠 Generating ${virusCount} viruses for level ${level}`);
-    
-    // For higher levels, use more of the board (classic Dr. Mario behavior)
-    const boardUsage = Math.min(0.5 + (level * 0.02), 0.85); // Use more board area as level increases
+
+    const boardUsage = Math.min(0.5 + (level * 0.02), 0.85);
     const minY = Math.floor(this.board.cells.length * (1 - boardUsage));
     const maxY = this.board.cells.length - 1;
-    
+
     for (let i = 0; i < virusCount; i++) {
       let placed = false;
       let attempts = 0;
-      
-      while (!placed && attempts < 200) { // More attempts for higher virus counts
+
+      while (!placed && attempts < 200) {
         const x = Math.floor(Math.random() * this.board.cells[0].length);
         const y = Math.floor(Math.random() * (maxY - minY + 1)) + minY;
-        
+
         if (this.board.isEmpty(x, y)) {
           viruses.push({
             position: { x, y },
@@ -104,75 +133,16 @@ export class GameEngine {
         attempts++;
       }
     }
-    
+
     this.board.addViruses(viruses);
-  }
-
-  private spawnNextPill(): void {
-    if (!this.nextPill) return;
-    
-    // Only spawn if there are no falling pills
-    if (this.fallingPills.length === 0) {
-      // Virus Buster style: sometimes spawn multiple pills at once
-      const batchSize = this.shouldSpawnBatch() ? Math.floor(Math.random() * 3) + 1 : 1; // 1-3 pills
-      
-      // Calculate starting position to center the batch horizontally
-      // Pills are 2 cells wide, so we need 2-cell spacing for side-by-side placement
-      let startingX: number;
-      if (batchSize === 1) {
-        startingX = 3; // Center position
-      } else if (batchSize === 2) {
-        startingX = 2; // Start at x=2, next at x=4
-      } else { // batchSize === 3
-        startingX = 1; // Start at x=1, next at x=3, then x=5
-      }
-
-      for (let i = 0; i < batchSize; i++) {
-        const pill = i === 0 ? this.nextPill : Pill.generateRandomPill();
-        
-        // Position pills side-by-side with 2-cell spacing (accounting for pill width)
-        const pillX = startingX + (i * 2);
-        
-        // Ensure pill fits within board boundaries (pill occupies 2 cells: x and x+1)
-        const safeX = Math.max(0, Math.min(BOARD_WIDTH - 2, pillX));
-        pill.position.x = safeX;
-        
-        this.fallingPills.push(pill);
-        console.log(`Spawned pill ${i + 1}/${batchSize} at x=${safeX} (occupies cells ${safeX}-${safeX + 1})`);
-      }
-      
-      this.nextPill = Pill.generateRandomPill();
-      
-      // Check if the spawn positions are blocked
-      for (const pill of this.fallingPills) {
-        if (!pill.canMove(this.board, 0, 0)) {
-          this.gameOver();
-          return;
-        }
-      }
-      
-      if (batchSize > 1) {
-        console.log(`Spawned batch of ${batchSize} pills - player can select and drag each individually`);
-        console.log(`Pills positioned at: ${this.fallingPills.slice(-batchSize).map(p => `x=${p.position.x}`).join(', ')}`);
-      }
-    }
-  }
-
-  // Determine if we should spawn multiple pills (Virus Buster style)
-  private shouldSpawnBatch(): boolean {
-    // 50% chance to spawn multiple pills (increased for testing)
-    return Math.random() < 0.5;
   }
 
   update(deltaTime: number): void {
     if (this.gameState !== GameState.PLAYING) return;
-    
-    // Cap deltaTime to prevent spiral of death
+
     deltaTime = Math.min(deltaTime, 100);
-    
     this.accumulator += deltaTime;
-    
-    // Fixed timestep with interpolation
+
     while (this.accumulator >= this.FIXED_TIMESTEP) {
       this.fixedUpdate(this.FIXED_TIMESTEP);
       this.accumulator -= this.FIXED_TIMESTEP;
@@ -180,106 +150,287 @@ export class GameEngine {
   }
 
   private fixedUpdate(timestep: number): void {
-    if (this.fallingPills.length === 0) return;
-    
-    this.lastFallTime += timestep;
-    
-    // Check if it's time for normal gravity
-    const normalGravityTime = this.lastFallTime >= this.currentFallSpeed;
-    
-    if (normalGravityTime) {
-      this.lastFallTime = 0;
+    const placedAny = this.updateFalling(timestep);
+
+    if (placedAny) {
+      this.processMatches();
     }
-    
-    // Apply gravity to all pills, but at different speeds for fast-drop pills
-    this.applyGravityWithIndividualSpeeds(timestep, normalGravityTime);
+
+    if (this.gameState === GameState.PLAYING) {
+      this.maybeSpawnPill(timestep);
+    }
+
+    if (this.fallingPills.length > 0 || placedAny) {
+      this.notifyBoardChange();
+    }
   }
 
-  private applyGravityWithIndividualSpeeds(timestep: number, normalGravityTime: boolean): void {
-    // Apply gravity to all falling pills with individual timing
-    let falllingCount = 0;
-    let placedCount = 0;
-    
-    for (let i = this.fallingPills.length - 1; i >= 0; i--) {
-      const pill = this.fallingPills[i];
-      if (!pill || !pill.isActive) continue;
-      
-      // Check if this pill should fall this frame
-      const isFastDropPill = (pill as any).fastDrop === true;
-      const shouldFall = isFastDropPill || normalGravityTime;
-      
-      if (shouldFall && pill.canMove(this.board, 0, 1)) {
-        pill.move(0, 1);
-        falllingCount++;
-        console.log(`Gravity applied to pill ${i} at (${pill.position.x}, ${pill.position.y})${isFastDropPill ? ' [FAST]' : ''}`);
-      } else if (!pill.canMove(this.board, 0, 1)) {
-        // Pill can't move down, place it
-        console.log(`Placing pill ${i} at (${pill.position.x}, ${pill.position.y})`);
-        pill.place(this.board);
-        this.fallingPills.splice(i, 1);
-        placedCount++;
-        
-        // Clear selection if this pill was selected
-        if (pill === this.selectedPill) {
-          this.selectedPill = null;
+  // True if moving this piece by (dx, dy) would overlap another active
+  // falling piece. Board collision is checked separately via pill.canMove.
+  private entityBlocked(pill: Controllable, dx: number, dy: number): boolean {
+    const targets = pill.getPositions().map(pos => ({ x: pos.x + dx, y: pos.y + dy }));
+    for (const other of this.fallingPills) {
+      if (other === pill || !other.isActive) continue;
+      for (const pos of other.getPositions()) {
+        if (targets.some(t => t.x === pos.x && t.y === pos.y)) {
+          return true;
         }
-        
-        // Increment capsule counter for speed progression
-        this.stats.capsulesPlaced++;
-        this.updateSpeed();
       }
     }
-    
-    if (falllingCount > 0 || placedCount > 0) {
-      console.log(`Gravity cycle: ${falllingCount} pills fell, ${placedCount} pills placed`);
-    }
-    
-    this.notifyBoardChange();
-    
-    // Process matches after pills have been placed
-    if (this.fallingPills.length === 0 || this.fallingPills.every(pill => !pill.isActive)) {
-      this.processMatchesAndGravity();
-    }
+    return false;
   }
 
+  // Combined board + falling-piece collision check
+  private canPieceMove(pill: Controllable, dx: number, dy: number): boolean {
+    return pill.canMove(this.board, dx, dy) && !this.entityBlocked(pill, dx, dy);
+  }
 
-  // Find the best pill for gesture control (lowest/most advanced pill)
+  // Smooth gravity: each piece accumulates sub-cell fall progress. Held
+  // pieces are suspended. A piece resting on support uses fallOffset as a
+  // lock timer, so the player still has a moment to slide or rotate it.
+  private updateFalling(timestep: number): boolean {
+    let placedAny = false;
+
+    // Process bottom-most pieces first so pieces stacked mid-air move in
+    // the same tick as the piece beneath them
+    const order = [...this.fallingPills].sort((a, b) => b.position.y - a.position.y);
+
+    for (const pill of order) {
+      if (!pill || !pill.isActive) continue;
+      if (pill.held) continue;
+
+      const rate = pill.fastDrop ? FAST_FALL_SPEED : this.currentFallSpeed;
+      pill.fallOffset += timestep / rate;
+
+      while (pill.fallOffset >= 1) {
+        if (!pill.canMove(this.board, 0, 1)) {
+          // Lock timer expired while grounded: settle into the board
+          pill.place(this.board);
+          const index = this.fallingPills.indexOf(pill);
+          if (index !== -1) this.fallingPills.splice(index, 1);
+          if (pill === this.selectedPill) {
+            this.selectedPill = null;
+          }
+          if (pill instanceof Pill) {
+            this.stats.capsulesPlaced++;
+            this.updateSpeed();
+          }
+          placedAny = true;
+          break;
+        }
+        if (this.entityBlocked(pill, 0, 1)) {
+          // Resting on another falling piece: wait for it to move
+          pill.fallOffset = 0;
+          break;
+        }
+        pill.move(0, 1);
+        pill.fallOffset -= 1;
+      }
+    }
+
+    return placedAny;
+  }
+
+  // --- Continuous Germ Buster spawning ---
+
+  private maxConcurrentCapsules(): number {
+    let max = 1;
+    for (const threshold of CONCURRENT_PILL_THRESHOLDS) {
+      if (this.stats.capsulesPlaced >= threshold) max++;
+    }
+    return Math.min(max, MAX_CONCURRENT_PILLS);
+  }
+
+  private maybeSpawnPill(timestep: number): void {
+    this.spawnCooldown = Math.max(0, this.spawnCooldown - timestep);
+    if (this.spawnCooldown > 0) return;
+
+    const capsules = this.fallingPills.filter(
+      p => p.isActive && p instanceof Pill
+    );
+    if (capsules.length >= this.maxConcurrentCapsules()) return;
+
+    // Wait until the newest capsule has cleared the entry area
+    if (capsules.some(p => p.position.y < SPAWN_GAP_ROWS)) return;
+
+    this.trySpawnPill();
+  }
+
+  private trySpawnPill(): void {
+    if (!this.nextPill) return;
+
+    // Game over only if the entry cells are blocked by settled pieces
+    if (!this.board.isEmpty(SPAWN_X, 0) || !this.board.isEmpty(SPAWN_X + 1, 0)) {
+      this.gameOver();
+      return;
+    }
+
+    // If another falling piece is passing through the entry area, wait
+    for (const pill of this.fallingPills) {
+      if (!pill.isActive) continue;
+      for (const pos of pill.getPositions()) {
+        if (pos.y <= 1 && pos.x >= SPAWN_X - 1 && pos.x <= SPAWN_X + 2) {
+          return;
+        }
+      }
+    }
+
+    const pill = this.nextPill;
+    pill.position = { x: SPAWN_X, y: 0 };
+    this.fallingPills.push(pill);
+    this.nextPill = Pill.generateRandomPill();
+    this.spawnCooldown = SPAWN_COOLDOWN_MS;
+    this.notifyStatsChange();
+    this.notifyBoardChange();
+  }
+
+  // --- Touch controls: grab / drag / release / tap-rotate ---
+
+  // Grab the piece under the finger; it stops falling while held
+  grabPill(pillId: string): boolean {
+    if (this.gameState !== GameState.PLAYING) return false;
+    const pill = this.fallingPills.find(p => p.id === pillId && p.isActive);
+    if (!pill || !pill.isUserControllable) return false;
+
+    this.selectedPill = pill;
+    pill.held = true;
+    // Fold current sub-cell progress into the drag offset so the piece
+    // doesn't visually snap when grabbed
+    this.grabStart = { x: pill.position.x, y: pill.position.y + pill.fallOffset };
+    pill.dragOffsetX = 0;
+    pill.dragOffsetY = pill.fallOffset;
+    pill.fallOffset = 0;
+    this.notifyBoardChange();
+    return true;
+  }
+
+  // Move the held piece toward the finger. Translation is cumulative since
+  // the grab, in cell units. Movement is committed cell-by-cell with
+  // collision checks; the fractional remainder is a visual lean only.
+  // Pieces can move sideways and down, never up (as in Germ Buster).
+  dragHeldPill(translationX: number, translationY: number): void {
+    const pill = this.selectedPill;
+    if (!pill || !pill.held || !pill.isActive || !this.grabStart) return;
+    if (this.gameState !== GameState.PLAYING) return;
+
+    const targetX = this.grabStart.x + translationX;
+    const targetY = this.grabStart.y + translationY;
+
+    let guard = BOARD_WIDTH;
+    while (guard-- > 0 && Math.round(targetX) > pill.position.x && this.canPieceMove(pill, 1, 0)) {
+      pill.move(1, 0);
+    }
+    guard = BOARD_WIDTH;
+    while (guard-- > 0 && Math.round(targetX) < pill.position.x && this.canPieceMove(pill, -1, 0)) {
+      pill.move(-1, 0);
+    }
+    guard = BOARD_HEIGHT;
+    while (guard-- > 0 && Math.floor(targetY) > pill.position.y && this.canPieceMove(pill, 0, 1)) {
+      pill.move(0, 1);
+    }
+
+    // Visual lean toward the finger, clamped so the piece never appears
+    // inside a wall or below its support
+    const fracX = targetX - pill.position.x;
+    const maxLeanRight = this.canPieceMove(pill, 1, 0) ? 0.45 : 0.05;
+    const maxLeanLeft = this.canPieceMove(pill, -1, 0) ? -0.45 : -0.05;
+    pill.dragOffsetX = Math.max(maxLeanLeft, Math.min(maxLeanRight, fracX));
+
+    const fracY = targetY - pill.position.y;
+    const maxLeanDown = this.canPieceMove(pill, 0, 1) ? 0.9 : 0.05;
+    pill.dragOffsetY = Math.max(-0.15, Math.min(maxLeanDown, fracY));
+
+    this.notifyBoardChange();
+  }
+
+  // Finger lifted: the piece resumes falling from where it was left
+  releaseHeldPill(): void {
+    const pill = this.selectedPill;
+    if (!pill || !pill.held) return;
+
+    pill.held = false;
+    if (!pill.canMove(this.board, 0, 1)) {
+      // Resting on settled pieces: start the lock timer partway through so
+      // the piece settles quickly after release
+      pill.fallOffset = GROUNDED_RELEASE_LOCK;
+    } else if (this.entityBlocked(pill, 0, 1)) {
+      // Resting on another falling piece: wait for it to move
+      pill.fallOffset = 0;
+    } else {
+      pill.fallOffset = Math.max(0, Math.min(0.99, pill.dragOffsetY));
+    }
+    pill.dragOffsetX = 0;
+    pill.dragOffsetY = 0;
+    pill.fastDrop = false;
+    this.selectedPill = null;
+    this.grabStart = null;
+    this.notifyBoardChange();
+  }
+
+  // Tap a capsule to rotate it clockwise (with wall kicks)
+  rotatePillById(pillId: string): boolean {
+    if (this.gameState !== GameState.PLAYING) return false;
+    const pill = this.fallingPills.find(p => p.id === pillId && p.isActive);
+    if (!pill || !pill.isUserControllable) return false;
+
+    this.selectedPill = pill;
+    if (pill instanceof Pill) {
+      if (pill.tryRotateWithKicks(this.board)) {
+        this.soundManager.playRotate();
+        this.notifyBoardChange();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Tap to rotate pill at board position (kept for external callers)
+  tapToRotate(boardX: number, boardY: number): boolean {
+    const pill = this.findPillAt(boardX, boardY);
+    if (pill) {
+      return this.rotatePillById(pill.id);
+    }
+    return false;
+  }
+
+  // --- Keyboard controls (web) ---
+
   private findBestPillForGesture(): Controllable | null {
     const controllablePills = this.fallingPills.filter(pill => pill.isActive && pill.isUserControllable);
     if (controllablePills.length === 0) return null;
-    
-    // Find the lowest (most advanced) pill
+
     let bestPill = controllablePills[0];
     let lowestY = bestPill.position.y;
-    
+
     for (const pill of controllablePills) {
       if (pill.position.y > lowestY) {
         lowestY = pill.position.y;
         bestPill = pill;
       }
     }
-    
+
     return bestPill;
   }
 
-  // Keyboard/gesture movement - works with selected pill or auto-selects appropriate pill
-  movePill(direction: Direction): void {
-    if (this.fallingPills.length === 0 || this.gameState !== GameState.PLAYING) return;
-    
-    // Use selected pill if available, otherwise auto-select the lowest controllable pill
+  private resolveControlledPill(): Controllable | null {
     let currentPill = this.selectedPill;
     if (!currentPill || !this.fallingPills.includes(currentPill)) {
-      // Auto-select the lowest (most advanced) controllable pill for gestures
       currentPill = this.findBestPillForGesture();
       if (currentPill) {
         this.selectPill(currentPill);
       }
     }
-    
+    return currentPill;
+  }
+
+  movePill(direction: Direction): void {
+    if (this.fallingPills.length === 0 || this.gameState !== GameState.PLAYING) return;
+
+    const currentPill = this.resolveControlledPill();
     if (!currentPill) return;
-    
+
     let dx = 0, dy = 0;
-    
+
     switch (direction) {
       case Direction.LEFT:
         dx = -1;
@@ -291,8 +442,8 @@ export class GameEngine {
         dy = 1;
         break;
     }
-    
-    if (currentPill.canMove(this.board, dx, dy)) {
+
+    if (this.canPieceMove(currentPill, dx, dy)) {
       currentPill.move(dx, dy);
       if (direction !== Direction.DOWN) {
         this.soundManager.playMove();
@@ -301,23 +452,13 @@ export class GameEngine {
     }
   }
 
-  // Keyboard/gesture rotation - works with selected pill or auto-selects appropriate pill  
   rotatePill(): void {
     if (this.fallingPills.length === 0 || this.gameState !== GameState.PLAYING) return;
-    
-    // Use selected pill if available, otherwise auto-select the best pill for gestures
-    let currentPill = this.selectedPill;
-    if (!currentPill || !this.fallingPills.includes(currentPill)) {
-      currentPill = this.findBestPillForGesture();
-      if (currentPill) {
-        this.selectPill(currentPill);
-      }
-    }
-    
+
+    const currentPill = this.resolveControlledPill();
     if (!currentPill) return;
-    
-    // Only rotate regular pills, not single pills
-    if ('tryRotateWithKicks' in currentPill) {
+
+    if (currentPill instanceof Pill) {
       if (currentPill.tryRotateWithKicks(this.board)) {
         this.soundManager.playRotate();
         this.notifyBoardChange();
@@ -325,100 +466,139 @@ export class GameEngine {
     }
   }
 
-  // Drop selected pill instantly to bottom
   dropPill(): void {
     if (this.fallingPills.length === 0 || this.gameState !== GameState.PLAYING) return;
-    
-    // Use selected pill if available, otherwise auto-select the best pill for gestures
-    let currentPill = this.selectedPill;
-    if (!currentPill || !this.fallingPills.includes(currentPill)) {
-      currentPill = this.findBestPillForGesture();
-      if (currentPill) {
-        this.selectPill(currentPill);
-      }
-    }
-    
+
+    const currentPill = this.resolveControlledPill();
     if (!currentPill) return;
-    
-    // Move down until can't move anymore
-    while (currentPill.canMove(this.board, 0, 1)) {
+
+    while (this.canPieceMove(currentPill, 0, 1)) {
       currentPill.move(0, 1);
     }
-    
+    currentPill.fallOffset = GROUNDED_RELEASE_LOCK;
+
     this.soundManager.playDrop();
     this.notifyBoardChange();
   }
 
-  // Pill switching no longer needed - one pill at a time
-
-
-  // Legacy method - pills now place automatically when gravity is applied
-  private placePill(): void {
-    // This method is deprecated - pills automatically place when they can't fall further
-    console.warn('placePill() is deprecated. Pills place automatically via gravity.');
+  setFastDrop(fast: boolean): void {
+    let pill = this.selectedPill;
+    if ((!pill || !this.fallingPills.includes(pill)) && fast) {
+      pill = this.findBestPillForGesture();
+      if (pill) this.selectPill(pill);
+    }
+    if (pill && this.fallingPills.includes(pill)) {
+      pill.fastDrop = fast;
+    }
   }
 
-  // Legacy method - no longer needed without active pill index
-  private findLowestPill(): number {
-    console.warn('findLowestPill() is deprecated. No active pill management needed.');
-    return -1;
+  // Cycle keyboard selection through the falling pieces (Tab on web)
+  switchToNextPill(): void {
+    const pills = this.fallingPills.filter(p => p.isActive && p.isUserControllable);
+    if (pills.length === 0) return;
+    const idx = this.selectedPill ? pills.indexOf(this.selectedPill) : -1;
+    this.selectPill(pills[(idx + 1) % pills.length]);
   }
 
-  private getLowestPositionY(pill: Controllable): number {
-    // All controllables now have a position property
-    return pill.position.y;
+  // --- Matching, chains, and floating-piece release ---
+
+  private processMatches(): void {
+    const matches = this.matchingSystem.findMatches();
+
+    if (matches.length === 0) {
+      // Chain is over once everything has settled with no new matches
+      if (this.fallingPills.length === 0) {
+        this.combo = 0;
+      }
+      this.checkEndConditions();
+      return;
+    }
+
+    const { clearedCount, splits } = this.matchingSystem.clearMatches(matches);
+
+    if (clearedCount > 0) {
+      this.combo++;
+      this.stats.score += clearedCount * 100 * this.combo;
+      this.stats.linesCleared += Math.floor(clearedCount / 4);
+      this.soundManager.playMatch();
+
+      // Rare multi-cell splits reported by the matching system
+      splits.forEach(split => {
+        this.fallingPills.push(new SinglePill(split.color, split.position, true));
+      });
+
+      // Germ Buster signature: unsupported pieces start falling slowly and
+      // can be grabbed and steered by the player
+      this.releaseFloatingPieces();
+
+      this.notifyBoardChange();
+    }
+
+    this.checkEndConditions();
   }
 
+  // Convert every unsupported piece on the board (half capsules and whole
+  // capsules alike) into a slow-falling, draggable entity
+  private releaseFloatingPieces(): void {
+    let releasedAny = true;
 
+    while (releasedAny) {
+      releasedAny = false;
 
-  private processMatchesAndGravity(): void {
-    let totalCleared = 0;
-    let combo = 0;
-    
-    // Keep processing matches until no more are found
-    let hasMatches = true;
-    while (hasMatches) {
-      const { cleared, matches, splits } = this.matchingSystem.processMatches();
-      
-      if (cleared > 0) {
-        totalCleared += cleared;
-        combo++;
-        this.stats.score += cleared * 100 * combo;
-        this.soundManager.playMatch();
-        
-        // Handle splits - create individual touchable pills
-        if (splits.length > 0) {
-          console.log(`Creating ${splits.length} individual split pills:`, splits);
-          // Create individual SinglePill that can be touched and dragged
-          splits.forEach(split => {
-            const singlePill = new SinglePill(split.color, split.position, true); // true = touchable
-            this.fallingPills.push(singlePill);
-            console.log(`Added touchable split pill at (${split.position.x}, ${split.position.y}) with color ${split.color}`);
+      // Collect pill cells grouped by capsule id
+      const groups = new Map<string, Array<{ position: Position; color: Color }>>();
+      for (let y = 0; y < BOARD_HEIGHT; y++) {
+        for (let x = 0; x < BOARD_WIDTH; x++) {
+          const cell = this.board.getCell(x, y);
+          if (cell && cell.type === CellType.PILL && cell.color) {
+            const key = cell.pillId ?? `loose-${x}-${y}`;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key)!.push({ position: { x, y }, color: cell.color });
+          }
+        }
+      }
+
+      groups.forEach((cells, pillId) => {
+        if (!this.canGroupFall(cells)) return;
+
+        // Remove from the board and re-create as a falling entity
+        cells.forEach(({ position }) => {
+          this.board.setCell(position.x, position.y, { type: CellType.EMPTY, color: null });
+        });
+
+        if (cells.length === 2) {
+          this.fallingPills.push(Pill.fromBoardCells(cells, pillId));
+        } else {
+          cells.forEach(({ position, color }) => {
+            this.fallingPills.push(new SinglePill(color, position, true));
           });
         }
-        
-        this.notifyBoardChange();
-        
-        // Small delay between combo steps would go here in a real game
-      } else {
-        hasMatches = false;
+        releasedAny = true;
+      });
+    }
+  }
+
+  private canGroupFall(cells: Array<{ position: Position }>): boolean {
+    for (const { position } of cells) {
+      if (position.y >= BOARD_HEIGHT - 1) return false;
+      const below = this.board.getCell(position.x, position.y + 1);
+      if (below && below.type !== CellType.EMPTY) {
+        // Support from a cell of the same group doesn't count as support
+        const isOwnCell = cells.some(
+          c => c.position.x === position.x && c.position.y === position.y + 1
+        );
+        if (!isOwnCell) return false;
       }
     }
-    
-    if (totalCleared > 0) {
-      this.stats.linesCleared += Math.floor(totalCleared / 4);
-      this.notifyStatsChange();
-    }
-    
-    // Check win condition
+    return true;
+  }
+
+  private checkEndConditions(): void {
     this.stats.virusCount = this.board.countViruses();
     this.notifyStatsChange();
-    
+
     if (this.stats.virusCount === 0) {
       this.levelComplete();
-    } else if (this.fallingPills.length === 0) {
-      // Only spawn next pill if no pills are falling
-      this.spawnNextPill();
     }
   }
 
@@ -428,47 +608,25 @@ export class GameEngine {
   }
 
   private levelComplete(): void {
-    console.log(`Level ${this.stats.level} completed! Score: ${this.stats.score}`);
     this.soundManager.playLevelComplete();
     this.changeState(GameState.LEVEL_COMPLETE);
     this.stats.score += 1000 * this.stats.level;
-    console.log(`Level complete bonus applied. New score: ${this.stats.score}`);
     this.notifyStatsChange();
   }
 
   pause(): void {
-    console.log('Pause requested, current state:', this.gameState);
     if (this.gameState === GameState.PLAYING) {
       this.changeState(GameState.PAUSED);
     }
   }
 
   resume(): void {
-    console.log('Resume requested, current state:', this.gameState);
     if (this.gameState === GameState.PAUSED) {
       this.changeState(GameState.PLAYING);
     }
   }
 
-  // Set fast drop for selected pill only (individual control)
-  setFastDrop(fast: boolean): void {
-    if (this.selectedPill && this.fallingPills.includes(this.selectedPill)) {
-      // Apply fast drop to selected pill by giving it a custom fall speed
-      (this.selectedPill as any).fastDrop = fast;
-      console.log(`Fast drop ${fast ? 'enabled' : 'disabled'} for selected pill at (${this.selectedPill.position.x}, ${this.selectedPill.position.y})`);
-    } else if (fast) {
-      // If no pill selected but fast drop requested, auto-select and apply
-      const bestPill = this.findBestPillForGesture();
-      if (bestPill) {
-        this.selectPill(bestPill);
-        (bestPill as any).fastDrop = true;
-        console.log(`Auto-selected pill for fast drop at (${bestPill.position.x}, ${bestPill.position.y})`);
-      }
-    }
-  }
-
   private updateSpeed(): void {
-    // Classic Dr. Mario: speed increases every 10 capsules placed
     const newSpeedLevel = Math.floor(this.stats.capsulesPlaced / SPEED_INCREASE_INTERVAL);
     if (newSpeedLevel > this.stats.currentSpeedLevel && newSpeedLevel <= MAX_SPEED_INCREASES) {
       this.stats.currentSpeedLevel = newSpeedLevel;
@@ -478,13 +636,11 @@ export class GameEngine {
   }
 
   private getProgressiveSpeed(): number {
-    // Calculate current speed based on speed level (each level makes it faster)
     const speedMultiplier = Math.pow(SPEED_INCREASE_FACTOR, this.stats.currentSpeedLevel);
-    return Math.max(50, Math.floor(this.baseFallSpeed * speedMultiplier)); // Never go faster than 50ms
+    return Math.max(50, Math.floor(this.baseFallSpeed * speedMultiplier));
   }
 
   private changeState(newState: GameState): void {
-    console.log(`GameEngine state change: ${this.gameState} -> ${newState}`);
     this.gameState = newState;
     if (this.onStateChange) {
       this.onStateChange(newState);
@@ -507,20 +663,8 @@ export class GameEngine {
     return this.board;
   }
 
-  // Legacy method - replaced by getSelectedPill()
-  getCurrentPill(): Controllable | null {
-    // Return currently selected pill instead of "active" pill
-    return this.getSelectedPill();
-  }
-
   getAllFallingPills(): Controllable[] {
     return this.fallingPills;
-  }
-
-  // Legacy method - no longer relevant in touch-based gameplay
-  getActivePillIndex(): number {
-    console.warn('getActivePillIndex() is deprecated. Use getSelectedPill() instead.');
-    return -1;
   }
 
   getNextPill(): Pill | null {
@@ -535,12 +679,10 @@ export class GameEngine {
     return { ...this.stats };
   }
 
-
-  // Find pill at screen/board coordinates
   findPillAt(boardX: number, boardY: number): Controllable | null {
     for (const pill of this.fallingPills) {
       if (!pill.isActive) continue;
-      
+
       const positions = pill.getPositions();
       for (const pos of positions) {
         if (pos.x === boardX && pos.y === boardY) {
@@ -551,56 +693,23 @@ export class GameEngine {
     return null;
   }
 
-
-
-  // Select a pill for individual control
   selectPill(pill: Controllable | null): boolean {
     if (pill && this.fallingPills.includes(pill)) {
       this.selectedPill = pill;
-      console.log(`Selected pill at (${pill.position.x}, ${pill.position.y})`);
-      this.notifyBoardChange(); // Update UI to show selection
+      this.notifyBoardChange();
       return true;
     }
     return false;
   }
 
-  // Deselect the currently selected pill
   deselectPill(): void {
     if (this.selectedPill) {
-      console.log(`Deselected pill at (${this.selectedPill.position.x}, ${this.selectedPill.position.y})`);
       this.selectedPill = null;
-      this.notifyBoardChange(); // Update UI to hide selection
+      this.notifyBoardChange();
     }
   }
 
-  // Get the currently selected pill
   getSelectedPill(): Controllable | null {
     return this.selectedPill;
-  }
-
-  // Select pill at board position for touch-based control
-  selectPillAt(boardX: number, boardY: number): boolean {
-    const pill = this.findPillAt(boardX, boardY);
-    if (pill) {
-      return this.selectPill(pill);
-    } else {
-      this.deselectPill(); // Deselect if tapping empty space
-    }
-    return false;
-  }
-
-  // Tap to rotate pill at position  
-  tapToRotate(boardX: number, boardY: number): boolean {
-    if (this.gameState !== GameState.PLAYING) return false;
-    
-    const pill = this.findPillAt(boardX, boardY);
-    if (pill && 'tryRotateWithKicks' in pill) {
-      if (pill.tryRotateWithKicks(this.board)) {
-        this.soundManager.playRotate();
-        this.notifyBoardChange();
-        return true;
-      }
-    }
-    return false;
   }
 }
