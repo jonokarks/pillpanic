@@ -114,12 +114,13 @@ export class MatchingSystem {
       });
     });
 
-    // Second pass: handle pill splitting
+    // Second pass: handle pill splitting (CONSERVATIVE APPROACH)
     affectedPills.forEach((clearedParts, pillId) => {
       const allPillCells = this.findPillCells(pillId);
       
-      // If only part of the pill is being cleared, mark the remaining part for splitting
-      if (clearedParts.length < allPillCells.length) {
+      // Only split pills if they have more than 2 cells AND there are remaining parts
+      // For standard 2-cell Dr. Mario pills, just let the remaining cell fall normally
+      if (clearedParts.length < allPillCells.length && allPillCells.length > 2) {
         allPillCells.forEach(pos => {
           const posKey = `${pos.x},${pos.y}`;
           if (!clearedPositions.has(posKey)) {
@@ -136,6 +137,7 @@ export class MatchingSystem {
           }
         });
       }
+      // For 2-cell pills, the remaining cell will just fall normally without splitting
     });
 
     // Third pass: clear all affected positions

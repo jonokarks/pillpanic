@@ -4,19 +4,46 @@ export const BOARD_WIDTH = 8;
 export const BOARD_HEIGHT = 16;
 export const CELL_SIZE = theme.dimensions.cellSize;
 
-// Classic Dr. Mario speed system
-export const BASE_FALL_SPEEDS = {
-  LOW: 1200,    // slowest
-  MEDIUM: 800,  // medium
-  HIGH: 400,    // fastest
+// Germ Buster (Virus Buster) difficulty model: the fall speed stays gentle
+// and constant — difficulty comes from how MANY capsules are airborne at
+// once and how quickly new ones are added, not from speeding up.
+//
+// fallSpeed: ms per row while drifting down
+// spawnCooldownMs: minimum gap between two capsules entering
+// maxConcurrent: cap on simultaneous capsules for this difficulty
+// concurrencyThresholds: capsulesPlaced counts at which one more
+//   simultaneous capsule starts appearing (ramps 1 -> maxConcurrent)
+export const DIFFICULTY_SETTINGS = {
+  LOW: {
+    fallSpeed: 1100,
+    spawnCooldownMs: 900,
+    maxConcurrent: 2,
+    concurrencyThresholds: [15],
+  },
+  MEDIUM: {
+    fallSpeed: 950,
+    spawnCooldownMs: 600,
+    maxConcurrent: 3,
+    concurrencyThresholds: [8, 20],
+  },
+  HIGH: {
+    fallSpeed: 850,
+    spawnCooldownMs: 450,
+    maxConcurrent: 4,
+    concurrencyThresholds: [5, 12, 24],
+  },
 };
 
-// Speed increases every 10 capsules placed (classic Dr. Mario behavior)
-export const SPEED_INCREASE_INTERVAL = 10;
-export const MAX_SPEED_INCREASES = 49; // Maximum of 50 speed levels total
-export const SPEED_INCREASE_FACTOR = 0.95; // Each increase multiplies speed by this (makes it faster)
-
 export const FAST_FALL_SPEED = 50; // Fast drop speed
+
+// Germ Buster (Virus Buster) style continuous spawning:
+// a new capsule enters while others are still falling
+export const SPAWN_GAP_ROWS = 4; // newest capsule must fall this far before the next enters
+export const MAX_CONCURRENT_PILLS = 4;
+// A piece released while resting on support locks after the remaining
+// (1 - GROUNDED_RELEASE_LOCK) fraction of a fall interval
+export const GROUNDED_RELEASE_LOCK = 0.6;
+export const SPAWN_X = 3; // entry column (capsule occupies SPAWN_X and SPAWN_X + 1)
 
 // Classic Dr. Mario virus count formula
 export const getVirusCount = (level: number): number => {

@@ -3,6 +3,8 @@ import { Cell, GameBoard, Position, Virus } from '../utils/types';
 
 export class Board implements GameBoard {
   cells: Cell[][];
+  // Bumped on every mutation so the renderer can memoize the static grid
+  version: number = 0;
 
   constructor() {
     this.cells = this.createEmptyBoard();
@@ -19,6 +21,7 @@ export class Board implements GameBoard {
 
   clear(): void {
     this.cells = this.createEmptyBoard();
+    this.version++;
   }
 
   getCell(x: number, y: number): Cell | null {
@@ -31,6 +34,7 @@ export class Board implements GameBoard {
   setCell(x: number, y: number, cell: Cell): void {
     if (x >= 0 && x < BOARD_WIDTH && y >= 0 && y < BOARD_HEIGHT) {
       this.cells[y][x] = cell;
+      this.version++;
     }
   }
 
@@ -50,10 +54,9 @@ export class Board implements GameBoard {
           type: CellType.VIRUS,
           color: virus.color,
         };
-        console.log(`🦠 Placed virus at (${virus.position.x}, ${virus.position.y}) with color ${virus.color}`);
       }
     });
-    console.log(`🦠 Total viruses on board: ${this.countViruses()}`);
+    this.version++;
   }
 
   countViruses(): number {

@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { View, StyleSheet, Platform } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, TouchableOpacity, Text, StyleSheet, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { GameEngine } from '../game/GameEngine';
 import { Direction } from '../game/utils/constants';
@@ -12,21 +12,27 @@ interface GameControlsProps {
 const INPUT_COOLDOWN = 100; // milliseconds
 
 export const GameControls: React.FC<GameControlsProps> = ({ gameEngine, children }) => {
+  const lastInputTime = useRef<{ [key: string]: number }>({
+    left: 0,
+    right: 0,
+    down: 0,
+    rotate: 0,
+    switch: 0,
+    drop: 0,
+  });
+
+  const canInput = (action: string): boolean => {
+    const now = Date.now();
+    const lastTime = lastInputTime.current[action] || 0;
+    if (now - lastTime > INPUT_COOLDOWN) {
+      lastInputTime.current[action] = now;
+      return true;
+    }
+    return false;
+  };
   // Keyboard controls for web - work alongside touch controls
   useEffect(() => {
     if (Platform.OS === 'web') {
-      const lastInputTime: { [key: string]: number } = {};
-
-      const canInput = (action: string): boolean => {
-        const now = Date.now();
-        const lastTime = lastInputTime[action] || 0;
-        if (now - lastTime > INPUT_COOLDOWN) {
-          lastInputTime[action] = now;
-          return true;
-        }
-        return false;
-      };
-
       const handleKeyPress = (event: KeyboardEvent) => {
         switch (event.key) {
           case 'ArrowLeft':
@@ -88,7 +94,7 @@ export const GameControls: React.FC<GameControlsProps> = ({ gameEngine, children
         window.removeEventListener('keyup', handleKeyUp);
       };
     }
-  }, [gameEngine]);
+  }, [gameEngine, canInput]);
 
 
   // Global pan gestures removed - individual pills now handle their own drag gestures
@@ -105,5 +111,34 @@ export const GameControls: React.FC<GameControlsProps> = ({ gameEngine, children
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  mobileControls: {
+    position: 'absolute',
+    bottom: 20,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  controlRow: {
+    flexDirection: 'row',
+    marginBottom: 10,
+  },
+  controlButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#4444FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: 10,
+  },
+  dropButton: {
+    width: 120,
+    backgroundColor: '#FF4444',
+  },
+  controlText: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
   },
 });

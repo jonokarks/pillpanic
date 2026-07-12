@@ -9,14 +9,24 @@ export class Pill implements PillType {
   colors: [Color, Color];
   isActive: boolean;
   isUserControllable: boolean; // Regular pills are user-controllable
+  fallOffset: number;
+  held: boolean;
+  fastDrop: boolean;
+  dragOffsetX: number;
+  dragOffsetY: number;
 
   constructor(colors: [Color, Color], startX: number = 3) {
-    this.id = `pill-${Date.now()}`;
+    this.id = `pill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.position = { x: startX, y: 0 };
     this.orientation = Orientation.HORIZONTAL;
     this.colors = colors;
     this.isActive = true;
     this.isUserControllable = true; // Regular pills are user-controllable
+    this.fallOffset = 0;
+    this.held = false;
+    this.fastDrop = false;
+    this.dragOffsetX = 0;
+    this.dragOffsetY = 0;
   }
 
   getPositions(): [Position, Position] {
@@ -196,5 +206,30 @@ export class Pill implements PillType {
     const color1 = colors[Math.floor(Math.random() * colors.length)];
     const color2 = colors[Math.floor(Math.random() * colors.length)];
     return new Pill([color1 as Color, color2 as Color]);
+  }
+
+  // Rebuild a capsule entity from two connected board cells (used when a
+  // clear leaves a whole capsule unsupported and it starts falling again)
+  static fromBoardCells(
+    cells: Array<{ position: Position; color: Color }>,
+    pillId: string
+  ): Pill {
+    const [a, b] = cells;
+    let pill: Pill;
+    if (a.position.y === b.position.y) {
+      const left = a.position.x < b.position.x ? a : b;
+      const right = a.position.x < b.position.x ? b : a;
+      pill = new Pill([left.color, right.color], left.position.x);
+      pill.orientation = Orientation.HORIZONTAL;
+      pill.position = { ...left.position };
+    } else {
+      const top = a.position.y < b.position.y ? a : b;
+      const bottom = a.position.y < b.position.y ? b : a;
+      pill = new Pill([top.color, bottom.color], top.position.x);
+      pill.orientation = Orientation.VERTICAL;
+      pill.position = { ...top.position };
+    }
+    pill.id = pillId;
+    return pill;
   }
 }

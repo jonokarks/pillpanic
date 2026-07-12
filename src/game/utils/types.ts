@@ -16,6 +16,16 @@ export interface Controllable {
   id: string;
   position: Position;
   isActive: boolean;
+  isUserControllable: boolean;
+  // Sub-cell fall progress (0..1) toward the next row; doubles as the lock
+  // timer while a piece is resting on support
+  fallOffset: number;
+  // True while the player's finger is holding this piece (suspends gravity)
+  held: boolean;
+  fastDrop: boolean;
+  // Visual-only lean toward the finger while dragging, in cell fractions
+  dragOffsetX: number;
+  dragOffsetY: number;
   canMove(board: Board, dx: number, dy: number): boolean;
   move(dx: number, dy: number): void;
   canRotate(board: Board): boolean;
@@ -47,6 +57,14 @@ export enum SpeedSetting {
   HIGH = 'HIGH',
 }
 
+export enum GameMode {
+  // Level-based: clear all viruses to finish the level
+  CLASSIC = 'CLASSIC',
+  // Virus Buster style continuous play: clearing the board immediately
+  // brings the next wave of viruses; the run ends only on game over
+  ENDLESS = 'ENDLESS',
+}
+
 export interface GameStats {
   score: number;
   level: number;
@@ -56,6 +74,11 @@ export interface GameStats {
   currentSpeedLevel: number;
   speedSetting: SpeedSetting;
 }
+
+export type GameFeedbackEvent =
+  | { type: 'land' }
+  | { type: 'match'; cleared: number; combo: number }
+  | { type: 'wave'; level: number };
 
 export interface SplitResult {
   position: Position;

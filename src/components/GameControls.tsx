@@ -38,6 +38,7 @@ export const GameControls: React.FC<GameControlsProps> = ({ gameEngine, children
           case 'ArrowLeft':
           case 'a':
           case 'A':
+            event.preventDefault(); // Stop the page scrolling while playing
             if (canInput('left')) {
               gameEngine.movePill(Direction.LEFT);
             }
@@ -45,6 +46,7 @@ export const GameControls: React.FC<GameControlsProps> = ({ gameEngine, children
           case 'ArrowRight':
           case 'd':
           case 'D':
+            event.preventDefault();
             if (canInput('right')) {
               gameEngine.movePill(Direction.RIGHT);
             }
@@ -52,17 +54,20 @@ export const GameControls: React.FC<GameControlsProps> = ({ gameEngine, children
           case 'ArrowDown':
           case 's':
           case 'S':
+            event.preventDefault();
             gameEngine.setFastDrop(true);
             break;
           case 'ArrowUp':
           case 'w':
           case 'W':
           case ' ':
+            event.preventDefault();
             if (canInput('rotate')) {
               gameEngine.rotatePill();
             }
             break;
           case 'Enter':
+            event.preventDefault();
             if (canInput('drop')) {
               gameEngine.dropPill();
             }
@@ -103,41 +108,7 @@ export const GameControls: React.FC<GameControlsProps> = ({ gameEngine, children
     <GestureHandlerRootView style={styles.container}>
       <View style={styles.container}>
         {children}
-          
-          {/* Mobile control buttons */}
-          {Platform.OS !== 'web' && (
-            <View style={styles.mobileControls}>
-              <View style={styles.controlRow}>
-                <TouchableOpacity
-                  style={styles.controlButton}
-                  onPress={() => gameEngine.movePill(Direction.LEFT)}
-                >
-                  <Text style={styles.controlText}>←</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.controlButton}
-                  onPress={() => gameEngine.rotatePill()}
-                >
-                  <Text style={styles.controlText}>↻</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.controlButton}
-                  onPress={() => gameEngine.movePill(Direction.RIGHT)}
-                >
-                  <Text style={styles.controlText}>→</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={styles.controlRow}>
-                <TouchableOpacity
-                  style={[styles.controlButton, styles.dropButton]}
-                  onPress={() => gameEngine.dropPill()}
-                >
-                  <Text style={styles.controlText}>DROP</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-        </View>
+      </View>
     </GestureHandlerRootView>
   );
 };

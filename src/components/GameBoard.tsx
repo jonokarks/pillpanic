@@ -1,406 +1,332 @@
-import React, { useEffect } from 'react';
-import { View, StyleSheet, Platform, TouchableOpacity } from 'react-native';
-import LinearGradient from 'react-native-linear-gradient';
+import React, { useEffect, useMemo, useState } from 'react';
+import { View, StyleSheet, Platform, useWindowDimensions } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
-  withTiming,
-  interpolate,
   runOnJS,
 } from 'react-native-reanimated';
-import { PanGestureHandler, State } from 'react-native-gesture-handler';
+import { PanGestureHandler, TapGestureHandler, State } from 'react-native-gesture-handler';
 import { Board } from '../game/entities/Board';
 import { Controllable } from '../game/utils/types';
 import { GameEngine } from '../game/GameEngine';
-import { 
-  BOARD_WIDTH, 
-  BOARD_HEIGHT, 
-  CELL_SIZE, 
-  COLOR_VALUES, 
+import {
+  BOARD_WIDTH,
+  BOARD_HEIGHT,
   COLOR_GRADIENTS,
   VIRUS_GRADIENTS,
   CellType,
   Color,
-  Direction
 } from '../game/utils/constants';
 import { theme } from '../utils/theme';
 
 const isWeb = Platform.OS === 'web';
 
-// Dr. Kawashima-style drag constants
-const DRAG_THRESHOLD = 15; // Minimum drag distance to trigger movement
-const DRAG_SENSITIVITY = 0.5; // How responsive the dragging feels
+// Generous touch slop so a fingertip can grab a moving piece without needing
+// pixel accuracy (the original used a stylus; fingers need a bigger target)
+const TOUCH_SLOP = { top: 24, bottom: 24, left: 24, right: 24 };
 
-interface GameBoardProps {
-  board: Board;
-  fallingPills: Controllable[];
-  gameEngine: GameEngine;
+// Board metrics derived from the live window size, so the game fits phones,
+// tablets, and desktop windows, and adapts to rotation/resizes
+export interface BoardLayout {
+  cellSize: number;
+  cellMargin: number;
+  cellPitch: number;
+  boardPadding: number;
 }
 
-interface CellProps {
-  x: number;
-  y: number;
-  backgroundColor: string;
-  gradientColors?: string[];
-  borderColor: string;
-  isVirus: boolean;
-  isActive: boolean;
-  isEmpty: boolean;
-  isJoinedPill?: boolean;
-  isUserControllable?: boolean;
-  onPress?: () => void;
-  onLongPress?: () => void;
-}
+const computeLayout = (width: number, height: number): BoardLayout => {
+  const cellMargin = isWeb ? 1.5 : 1;
+  const boardPadding = isWeb ? 6 : 4;
+  // Vertical space consumed by everything that isn't the grid (header, safe
+  // areas, board chrome). Kept generous so the board never overflows.
+  const reservedVertical = isWeb ? 230 : 200;
+  const reservedHorizontal = isWeb ? 90 : 32;
 
-interface DraggableCellProps extends CellProps {
-  gameEngine: GameEngine;
-  pill: Controllable;
-}
+  const pitchFromHeight =
+    (height - reservedVertical - boardPadding * 2) / BOARD_HEIGHT;
+  const pitchFromWidth =
+    (width - reservedHorizontal - boardPadding * 2) / BOARD_WIDTH;
+  const pitch = Math.floor(Math.min(pitchFromHeight, pitchFromWidth));
 
-const AnimatedCell: React.FC<CellProps> = ({ 
-  backgroundColor, 
-  gradientColors,
-  borderColor, 
-  isVirus, 
-  isActive,
-  isEmpty,
-  isJoinedPill = false,
-  isUserControllable = true,
-  onPress,
-  onLongPress
-}) => {
-  const scale = useSharedValue(isEmpty ? 1 : 0);
-  const glow = useSharedValue(0);
-
-  useEffect(() => {
-    if (!isEmpty) {
-      scale.value = withSpring(1, { damping: 10, stiffness: 200 });
-    } else {
-      scale.value = withTiming(1, { duration: 100 });
-    }
-
-    if (isActive) {
-      glow.value = withSpring(1, { damping: 15, stiffness: 150 });
-    } else {
-      glow.value = withTiming(0, { duration: 300 });
-    }
-  }, [isEmpty, isActive]);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-    shadowOpacity: interpolate(glow.value, [0, 1], [0, 0.8]),
-  }));
-
-  if (isEmpty) {
-    return (
-      <View style={[styles.cell, styles.emptyCell]} />
-    );
-  }
-
-  const cellContent = (
-    <Animated.View 
-      style={[
-        styles.cell,
-        animatedStyle,
-        isActive && styles.activeCellShadow,
-        { borderColor },
-        // Different border radius for split pills to make them appear more individual
-        !isJoinedPill && !isVirus && { borderRadius: theme.borderRadius.sm * 1.5 }
-      ]}
-    >
-      {gradientColors ? (
-        <LinearGradient
-          colors={gradientColors}
-          style={[
-            styles.cellContent,
-            isVirus && styles.virusCell,
-            // No dimming needed since all pills are now controllable
-          ]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-        />
-      ) : (
-        <View 
-          style={[
-            styles.cellContent,
-            { backgroundColor },
-            isVirus && styles.virusCell,
-            // No dimming needed since all pills are now controllable
-          ]}
-        />
-      )}
-    </Animated.View>
-  );
-
-  // Make controllable pills touchable
-  if (isUserControllable && (onPress || onLongPress)) {
-    return (
-      <TouchableOpacity 
-        onPress={onPress} 
-        onLongPress={onLongPress}
-        activeOpacity={0.8}
-        delayLongPress={500}
-      >
-        {cellContent}
-      </TouchableOpacity>
-    );
-  }
-
-  return cellContent;
+  const maxCell = isWeb ? 48 : 44;
+  const cellSize = Math.max(16, Math.min(maxCell, pitch - cellMargin * 2));
+  return {
+    cellSize,
+    cellMargin,
+    cellPitch: cellSize + cellMargin * 2,
+    boardPadding,
+  };
 };
 
-// Dr. Kawashima-style draggable pill cell with smooth real-time movement
-const DraggablePillCell: React.FC<DraggableCellProps> = ({ 
-  x, y, backgroundColor, gradientColors, borderColor, isVirus, isActive, isEmpty, 
-  isJoinedPill = false, isUserControllable = true, gameEngine, pill 
+interface GameBoardProps {
+  gameEngine: GameEngine;
+  reducedMotion?: boolean;
+}
+
+const TokenContent = ({
+  color,
+  isVirus,
+  cellSize,
+}: {
+  color: Color;
+  isVirus: boolean;
+  cellSize: number;
 }) => {
-  const dragX = useSharedValue(0);
-  const dragY = useSharedValue(0);
+  const gradientColors = isVirus ? VIRUS_GRADIENTS[color] : COLOR_GRADIENTS[color];
+  const markStyle =
+    color === Color.RED
+      ? styles.markStripe
+      : color === Color.BLUE
+        ? styles.markDot
+        : styles.markSlash;
+
+  return (
+    <LinearGradient
+      colors={gradientColors}
+      style={[
+        styles.cellContent,
+        isVirus ? { borderRadius: cellSize / 2 } : styles.pillFace,
+      ]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+    >
+      <View style={styles.tokenHighlight} />
+      {isVirus ? (
+        <>
+          <View style={styles.virusEyes}>
+            <View style={styles.virusEye} />
+            <View style={styles.virusEye} />
+          </View>
+          <View style={styles.virusMouth} />
+        </>
+      ) : (
+        <View style={markStyle} />
+      )}
+    </LinearGradient>
+  );
+};
+
+// The settled board: viruses and placed pill halves. Memoized on the board
+// version so the 60fps falling-piece updates don't re-render the grid.
+const StaticGrid = React.memo<{ board: Board; version: number; layout: BoardLayout }>(
+  ({ board, layout }) => {
+    const cellDims = {
+      width: layout.cellSize,
+      height: layout.cellSize,
+      margin: layout.cellMargin,
+    };
+    return (
+      <View>
+        {Array.from({ length: BOARD_HEIGHT }, (_, y) => (
+          <View key={y} style={styles.row}>
+            {Array.from({ length: BOARD_WIDTH }, (_, x) => {
+              const cell = board.getCell(x, y);
+              if (!cell || cell.type === CellType.EMPTY || !cell.color) {
+                return <View key={x} style={[styles.cell, styles.emptyCell, cellDims]} />;
+              }
+
+              const isVirus = cell.type === CellType.VIRUS;
+
+              return (
+                <View
+                  key={x}
+                  style={[
+                    styles.cell,
+                    cellDims,
+                    isVirus ? styles.virusCell : styles.settledPillCell,
+                  ]}
+                >
+                  <TokenContent color={cell.color} isVirus={isVirus} cellSize={layout.cellSize} />
+                </View>
+              );
+            })}
+          </View>
+        ))}
+      </View>
+    );
+  },
+  (prev, next) =>
+    prev.version === next.version && prev.layout.cellSize === next.layout.cellSize
+);
+
+// One falling piece (whole capsule or single half), absolutely positioned
+// over the grid. Follows the engine's smooth sub-cell position and carries
+// the Germ Buster gestures: drag to move, tap to rotate. Positioned with
+// transforms (GPU compositing) rather than left/top so per-frame movement
+// doesn't trigger native layout passes.
+const FallingPiece: React.FC<{
+  pill: Controllable;
+  board: Board;
+  gameEngine: GameEngine;
+  isSelected: boolean;
+  layout: BoardLayout;
+}> = ({ pill, board, gameEngine, isSelected, layout }) => {
   const scale = useSharedValue(1);
-  const isDragging = useSharedValue(false);
+  const { cellSize, cellMargin, cellPitch, boardPadding } = layout;
 
-  const selectPill = () => {
-    'worklet';
-    runOnJS(gameEngine.selectPillAt.bind(gameEngine))(x, y);
-  };
+  const positions = pill.getPositions();
+  const originX = pill.position.x;
+  const originY = pill.position.y;
 
-  const movePillToPosition = (newX: number, newY: number) => {
-    'worklet';
-    // Convert screen coordinates to board movements
-    const deltaX = Math.round(newX / CELL_SIZE);
-    const deltaY = Math.round(newY / CELL_SIZE);
-    
-    if (Math.abs(deltaX) >= 1) {
-      if (deltaX > 0) {
-        runOnJS(gameEngine.movePill.bind(gameEngine))(Direction.RIGHT);
-      } else {
-        runOnJS(gameEngine.movePill.bind(gameEngine))(Direction.LEFT);
-      }
-    }
-    
-    if (deltaY >= 1) {
-      runOnJS(gameEngine.setFastDrop.bind(gameEngine))(true);
-    }
-  };
+  // Smooth visual position: grid position + fall progress (or finger lean
+  // while held). A grounded piece shows no fall offset - its fallOffset is
+  // acting as the lock timer.
+  const visualX = originX + pill.dragOffsetX;
+  const visualY = pill.held
+    ? originY + pill.dragOffsetY
+    : originY + (pill.canMove(board, 0, 1) ? Math.min(pill.fallOffset, 0.99) : 0);
 
-  const handleGesture = (event: any) => {
+  const maxDX = Math.max(...positions.map(p => p.x - originX));
+  const maxDY = Math.max(...positions.map(p => p.y - originY));
+
+  const grab = (id: string) => gameEngine.grabPill(id);
+  const drag = (tx: number, ty: number) => gameEngine.dragHeldPill(tx, ty);
+  const release = () => gameEngine.releaseHeldPill();
+  const rotate = (id: string) => gameEngine.rotatePillById(id);
+
+  const handlePan = (event: any) => {
     'worklet';
     const { state, translationX, translationY } = event.nativeEvent;
 
     if (state === State.BEGAN) {
-      selectPill();
-      isDragging.value = true;
-      scale.value = withSpring(1.1); // Slight scale up when grabbed
+      scale.value = withSpring(1.08, { damping: 15, stiffness: 300 });
+      runOnJS(grab)(pill.id);
     } else if (state === State.ACTIVE) {
-      // Smooth real-time following
-      dragX.value = translationX * DRAG_SENSITIVITY;
-      dragY.value = translationY * DRAG_SENSITIVITY;
-      
-      // Trigger movements when dragging far enough
-      if (Math.abs(translationX) > DRAG_THRESHOLD || Math.abs(translationY) > DRAG_THRESHOLD) {
-        movePillToPosition(translationX, translationY);
-      }
-    } else if (state === State.END) {
-      isDragging.value = false;
-      scale.value = withSpring(1); // Return to normal size
-      // Smooth return to grid position
-      dragX.value = withSpring(0);
-      dragY.value = withSpring(0);
-      runOnJS(gameEngine.setFastDrop.bind(gameEngine))(false);
+      runOnJS(drag)(translationX / cellPitch, translationY / cellPitch);
+    } else if (
+      state === State.END ||
+      state === State.CANCELLED ||
+      state === State.FAILED
+    ) {
+      scale.value = withSpring(1, { damping: 15, stiffness: 300 });
+      runOnJS(release)();
+    }
+  };
+
+  const handleTap = (event: any) => {
+    'worklet';
+    if (event.nativeEvent.state === State.END) {
+      runOnJS(rotate)(pill.id);
     }
   };
 
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: dragX.value },
-      { translateY: dragY.value },
-      { scale: scale.value }
-    ],
-    zIndex: isDragging.value ? 10 : 1, // Bring dragged pills to front
+    transform: [{ scale: scale.value }],
   }));
 
-  // Create the pill content (same as AnimatedCell but with drag animation)
-  const pillContent = (
-    <Animated.View 
-      style={[
-        styles.cell,
-        animatedStyle,
-        isActive && styles.activeCellShadow,
-        { borderColor },
-        !isJoinedPill && !isVirus && { borderRadius: theme.borderRadius.sm * 1.5 }
-      ]}
-    >
-      {gradientColors ? (
-        <LinearGradient
-          colors={gradientColors}
-          style={[styles.cellContent, isVirus && styles.virusCell]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-        />
-      ) : (
-        <View style={[styles.cellContent, { backgroundColor }, isVirus && styles.virusCell]} />
-      )}
-    </Animated.View>
-  );
+  const colors: Color[] =
+    'colors' in pill && Array.isArray((pill as any).colors)
+      ? ((pill as any).colors as Color[])
+      : [(pill as any).color as Color];
+
+  const isCapsule = colors.length === 2;
 
   return (
-    <PanGestureHandler onGestureEvent={handleGesture} onHandlerStateChange={handleGesture}>
-      <Animated.View>
-        {pillContent}
+    <TapGestureHandler maxDist={12} hitSlop={TOUCH_SLOP} onHandlerStateChange={handleTap}>
+      <Animated.View
+        style={[
+          styles.piece,
+          {
+            width: (maxDX + 1) * cellPitch,
+            height: (maxDY + 1) * cellPitch,
+            zIndex: pill.held ? 10 : 2,
+            transform: [
+              { translateX: boardPadding + visualX * cellPitch },
+              { translateY: boardPadding + visualY * cellPitch },
+            ],
+          },
+        ]}
+      >
+        <PanGestureHandler
+          minDist={4}
+          hitSlop={TOUCH_SLOP}
+          shouldCancelWhenOutside={false}
+          onGestureEvent={handlePan}
+          onHandlerStateChange={handlePan}
+        >
+          <Animated.View style={[styles.pieceInner, animatedStyle]}>
+            {positions.map((pos, index) => (
+              <View
+                key={index}
+                style={[
+                  styles.cell,
+                  styles.pieceCell,
+                  {
+                    width: cellSize,
+                    height: cellSize,
+                    left: (pos.x - originX) * cellPitch + cellMargin,
+                    top: (pos.y - originY) * cellPitch + cellMargin,
+                    borderColor: isSelected
+                      ? theme.colors.warning
+                      : isCapsule
+                        ? 'rgba(255,255,255,0.52)'
+                        : 'rgba(255,255,255,0.34)',
+                    borderRadius: isCapsule
+                      ? theme.borderRadius.md
+                      : theme.borderRadius.round,
+                  },
+                  isSelected && styles.activeCellShadow,
+                ]}
+              >
+                <TokenContent color={colors[index] ?? colors[0]} isVirus={false} cellSize={cellSize} />
+              </View>
+            ))}
+          </Animated.View>
+        </PanGestureHandler>
       </Animated.View>
-    </PanGestureHandler>
+    </TapGestureHandler>
   );
 };
 
-export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, gameEngine }) => {
+export const GameBoard: React.FC<GameBoardProps> = ({ gameEngine, reducedMotion = false }) => {
   const boardScale = useSharedValue(0.95);
+  const { width, height } = useWindowDimensions();
+  const layout = useMemo(() => computeLayout(width, height), [width, height]);
+
+  // The board subscribes to engine ticks itself, so 60fps falling-piece
+  // updates re-render only this subtree - not the header/stats above it
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    gameEngine.setCallbacks({ onBoardChange: () => setTick(t => t + 1) });
+  }, [gameEngine]);
 
   useEffect(() => {
-    boardScale.value = withSpring(1, { damping: 12, stiffness: 180 });
-  }, []);
+    boardScale.value = reducedMotion ? 1 : withSpring(1, { damping: 12, stiffness: 180 });
+  }, [reducedMotion]);
 
   const boardAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: boardScale.value }],
   }));
 
-  // Tap to rotate pills only - movement handled by GameControls gestures
-  const handleCellTap = (x: number, y: number) => {
-    gameEngine.tapToRotate(x, y);
-  };
-
-  const renderCell = (x: number, y: number) => {
-    const cell = board.getCell(x, y);
-    let backgroundColor = theme.colors.cellEmpty;
-    let gradientColors: string[] | undefined;
-    let borderColor = theme.colors.cellBorder;
-    let isActivePill = false;
-    let isVirus = false;
-    let isEmpty = true;
-    let isJoinedPill = false;
-    let isUserControllable = true;
-    
-    // Check if this position is occupied by any falling pill
-    let currentPill: Controllable | null = null;
-    for (let i = 0; i < fallingPills.length; i++) {
-      const pill = fallingPills[i];
-      if (pill.isActive) {
-        const pillPositions = pill.getPositions();
-        
-        for (let j = 0; j < pillPositions.length; j++) {
-          const pos = pillPositions[j];
-          if (pos.x === x && pos.y === y) {
-            isEmpty = false;
-            currentPill = pill;
-            // Handle different pill types
-            if ('colors' in pill && Array.isArray((pill as any).colors)) {
-              // Regular pill with colors array (joined pill)
-              const pillColors = (pill as any).colors as Color[];
-              const color = pillColors[j];
-              backgroundColor = COLOR_VALUES[color];
-              gradientColors = COLOR_GRADIENTS[color];
-              isJoinedPill = true;
-            } else {
-              // Single pill (split pill)
-              const color = (pill as any).color as Color;
-              backgroundColor = COLOR_VALUES[color];
-              gradientColors = COLOR_GRADIENTS[color];
-              isJoinedPill = false;
-            }
-            
-            // Different border styles for joined vs split pills
-            isUserControllable = (pill as any).isUserControllable !== false;
-            
-            // Check if this pill is currently selected
-            const selectedPill = gameEngine.getSelectedPill();
-            const isSelectedPill = selectedPill === pill;
-            
-            if (isSelectedPill && isUserControllable) {
-              borderColor = theme.colors.warning; // Selected controllable pill (bright highlight)
-              isActivePill = true;
-            } else if (isJoinedPill) {
-              borderColor = 'rgba(255,255,255,0.6)'; // Joined pills
-            } else {
-              borderColor = 'rgba(200,200,255,0.5)'; // Split pills (slightly blue tint)
-            }
-            break;
-          }
-        }
-      }
-    }
-    
-    // If not occupied by falling pill, render the cell from the board
-    if (!isActivePill && cell && cell.type !== CellType.EMPTY && cell.color) {
-      isEmpty = false;
-      backgroundColor = COLOR_VALUES[cell.color];
-      if (cell.type === CellType.VIRUS) {
-        gradientColors = VIRUS_GRADIENTS[cell.color];
-        borderColor = 'rgba(0,0,0,0.5)';
-        isVirus = true;
-      } else {
-        gradientColors = COLOR_GRADIENTS[cell.color];
-        borderColor = 'rgba(255,255,255,0.3)';
-      }
-    }
-    
-    // Use DraggablePillCell for controllable pills, regular AnimatedCell for others
-    if (isUserControllable && !isEmpty && currentPill) {
-      return (
-        <DraggablePillCell
-          key={`${x}-${y}-drag`}
-          x={x}
-          y={y}
-          backgroundColor={backgroundColor}
-          gradientColors={gradientColors}
-          borderColor={borderColor}
-          isVirus={isVirus}
-          isActive={isActivePill}
-          isEmpty={isEmpty}
-          isJoinedPill={isJoinedPill}
-          isUserControllable={isUserControllable}
-          gameEngine={gameEngine}
-          pill={currentPill}
-        />
-      );
-    }
-
-    return (
-      <AnimatedCell
-        key={`${x}-${y}`}
-        x={x}
-        y={y}
-        backgroundColor={backgroundColor}
-        gradientColors={gradientColors}
-        borderColor={borderColor}
-        isVirus={isVirus}
-        isActive={isActivePill}
-        isEmpty={isEmpty}
-        isJoinedPill={isJoinedPill}
-        isUserControllable={isUserControllable}
-        onPress={!isEmpty ? () => {
-          // Tap on non-controllable cell - deselect any selected pill
-          gameEngine.deselectPill();
-        } : () => {
-          // Tap on empty cell - deselect any selected pill
-          gameEngine.deselectPill();
-        }}
-      />
-    );
-  };
+  const board = gameEngine.getBoard();
+  const fallingPills = gameEngine.getAllFallingPills();
+  const selectedPill = gameEngine.getSelectedPill();
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} accessible accessibilityRole="summary" accessibilityLabel="Pill Panic game board. Match four colours to clear every microbe.">
       <Animated.View style={[styles.boardWrapper, boardAnimatedStyle]}>
         <LinearGradient
           colors={['rgba(255,255,255,0.1)', 'rgba(255,255,255,0.05)']}
           style={styles.boardBackground}
         >
-          <View style={styles.board}>
-            {Array.from({ length: BOARD_HEIGHT }, (_, y) => (
-              <View key={y} style={styles.row}>
-                {Array.from({ length: BOARD_WIDTH }, (_, x) => renderCell(x, y))}
-              </View>
-            ))}
+          <View style={[styles.board, { padding: layout.boardPadding }]}>
+            <StaticGrid board={board} version={board.version} layout={layout} />
+            <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+              {fallingPills
+                .filter(pill => pill.isActive)
+                .map(pill => (
+                  <FallingPiece
+                    key={pill.id}
+                    pill={pill}
+                    board={board}
+                    gameEngine={gameEngine}
+                    isSelected={pill === selectedPill}
+                    layout={layout}
+                  />
+                ))}
+            </View>
           </View>
         </LinearGradient>
       </Animated.View>
@@ -412,55 +338,134 @@ const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
     justifyContent: 'center',
-    flex: isWeb ? 0 : 1, // Don't take full height on web
+    flex: isWeb ? 0 : 1,
   },
   boardWrapper: {
-    borderRadius: theme.borderRadius.lg,
+    borderRadius: theme.borderRadius.xl,
     ...theme.shadows.lg,
-    // Add extra spacing on desktop
     marginHorizontal: isWeb ? 20 : 0,
     marginVertical: isWeb ? 10 : 0,
   },
   boardBackground: {
-    borderRadius: theme.borderRadius.lg,
-    padding: isWeb ? 12 : 8, // More padding on desktop
-    borderWidth: isWeb ? 3 : 2, // Thicker border on desktop
+    borderRadius: theme.borderRadius.xl,
+    padding: isWeb ? 14 : 10,
+    borderWidth: 2,
     borderColor: theme.colors.boardBorder,
     backgroundColor: theme.colors.boardBackground,
   },
   board: {
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    borderRadius: theme.borderRadius.md,
-    padding: isWeb ? 6 : 4, // More padding on desktop
-    ...(isWeb ? {
-      userSelect: 'none',
-    } : {}),
+    backgroundColor: theme.colors.boardWell,
+    borderRadius: theme.borderRadius.lg,
+    padding: isWeb ? 2 : 1,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    ...(isWeb ? { userSelect: 'none' } : {}),
   },
   row: {
     flexDirection: 'row',
   },
   cell: {
-    width: CELL_SIZE,
-    height: CELL_SIZE,
-    borderWidth: isWeb ? 1.5 : 1, // Slightly thicker borders on desktop
-    margin: isWeb ? 1.5 : 1, // More spacing on desktop
-    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    margin: 1,
+    borderRadius: theme.borderRadius.md,
     overflow: 'hidden',
   },
   cellContent: {
     flex: 1,
+    overflow: 'hidden',
   },
   emptyCell: {
     backgroundColor: theme.colors.cellEmpty,
     borderColor: theme.colors.cellBorder,
   },
+  settledPillCell: {
+    borderColor: 'rgba(255,255,255,0.28)',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
   virusCell: {
-    borderRadius: CELL_SIZE / 2,
+    borderColor: 'rgba(255,255,255,0.22)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: theme.borderRadius.round,
+  },
+  pillFace: {
+    borderRadius: theme.borderRadius.md,
+  },
+  tokenHighlight: {
+    position: 'absolute',
+    left: '12%',
+    right: '24%',
+    top: '12%',
+    height: '22%',
+    borderRadius: theme.borderRadius.round,
+    backgroundColor: 'rgba(255,255,255,0.42)',
+  },
+  markStripe: {
+    position: 'absolute',
+    left: '18%',
+    right: '18%',
+    top: '45%',
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.64)',
+  },
+  markDot: {
+    position: 'absolute',
+    alignSelf: 'center',
+    bottom: '22%',
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.68)',
+  },
+  markSlash: {
+    position: 'absolute',
+    alignSelf: 'center',
+    top: '22%',
+    width: 4,
+    height: '58%',
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.64)',
+    transform: [{ rotate: '36deg' }],
+  },
+  virusEyes: {
+    position: 'absolute',
+    left: '24%',
+    right: '24%',
+    top: '31%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  virusEye: {
+    width: 4,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: 'rgba(36,48,74,0.86)',
+  },
+  virusMouth: {
+    position: 'absolute',
+    alignSelf: 'center',
+    bottom: '25%',
+    width: 10,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: 'rgba(36,48,74,0.48)',
+  },
+  piece: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+  },
+  pieceInner: {
+    flex: 1,
+  },
+  pieceCell: {
+    position: 'absolute',
+    margin: 0,
   },
   activeCellShadow: {
     shadowColor: theme.colors.warning,
     shadowOffset: { width: 0, height: 0 },
-    shadowRadius: isWeb ? 12 : 8, // More glow on desktop
+    shadowRadius: isWeb ? 12 : 8,
     elevation: isWeb ? 12 : 8,
   },
 });

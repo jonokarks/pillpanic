@@ -99,7 +99,11 @@ export class MatchingSystem {
         const cell = this.board.getCell(pos.x, pos.y);
         if (cell && cell.type !== CellType.EMPTY) {
           clearedPositions.add(`${pos.x},${pos.y}`);
-
+          
+          if (cell.type === CellType.VIRUS) {
+            console.log(`🦠 Virus at (${pos.x}, ${pos.y}) will be CLEARED in match!`);
+          }
+          
           if (cell.type === CellType.PILL && cell.pillId) {
             if (!affectedPills.has(cell.pillId)) {
               affectedPills.set(cell.pillId, []);
@@ -179,6 +183,7 @@ export class MatchingSystem {
             }
           } else if (cell.type === CellType.VIRUS) {
             // Viruses don't fall
+            console.log(`🦠 Virus at (${x}, ${y}) - NOT applying gravity (viruses stay in place)`);
             continue;
           }
         }

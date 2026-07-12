@@ -5,7 +5,15 @@ const STORAGE_KEYS = {
   GAME_STATE: '@PillPanic:gameState',
   SETTINGS: '@PillPanic:settings',
   HIGH_SCORES: '@PillPanic:highScores',
+  TUTORIAL_SEEN: '@PillPanic:tutorialSeen',
 };
+
+export interface GameSettings {
+  speedSetting: SpeedSetting;
+  soundEnabled: boolean;
+  hapticsEnabled: boolean;
+  reducedMotion: boolean;
+}
 
 export const Storage = {
   // Save game progress
@@ -32,10 +40,7 @@ export const Storage = {
   },
 
   // Save settings
-  async saveSettings(settings: {
-    speedSetting: SpeedSetting;
-    soundEnabled: boolean;
-  }): Promise<void> {
+  async saveSettings(settings: GameSettings): Promise<void> {
     try {
       await AsyncStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
     } catch (error) {
@@ -44,14 +49,16 @@ export const Storage = {
   },
 
   // Load settings
-  async loadSettings(): Promise<{
-    speedSetting: SpeedSetting;
-    soundEnabled: boolean;
-  } | null> {
+  async loadSettings(): Promise<GameSettings | null> {
     try {
       const savedSettings = await AsyncStorage.getItem(STORAGE_KEYS.SETTINGS);
       if (savedSettings) {
-        return JSON.parse(savedSettings);
+        const parsed = JSON.parse(savedSettings);
+        return {
+          ...parsed,
+          hapticsEnabled: parsed.hapticsEnabled ?? true,
+          reducedMotion: parsed.reducedMotion ?? false,
+        };
       }
       return null;
     } catch (error) {
@@ -96,9 +103,27 @@ export const Storage = {
         STORAGE_KEYS.GAME_STATE,
         STORAGE_KEYS.SETTINGS,
         STORAGE_KEYS.HIGH_SCORES,
+        STORAGE_KEYS.TUTORIAL_SEEN,
       ]);
     } catch (error) {
       console.error('Failed to clear data:', error);
+    }
+  },
+
+  async hasSeenTutorial(): Promise<boolean> {
+    try {
+      return (await AsyncStorage.getItem(STORAGE_KEYS.TUTORIAL_SEEN)) === 'true';
+    } catch (error) {
+      console.error('Failed to load tutorial state:', error);
+      return false;
+    }
+  },
+
+  async markTutorialSeen(): Promise<void> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.TUTORIAL_SEEN, 'true');
+    } catch (error) {
+      console.error('Failed to save tutorial state:', error);
     }
   },
 

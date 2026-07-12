@@ -1,63 +1,60 @@
-import React, { useEffect, useMemo, memo } from 'react';
-import { 
-  View, 
-  Text, 
-  TouchableOpacity, 
-  StyleSheet, 
-  Dimensions, 
+import React, { memo, useEffect, useMemo } from 'react';
+import {
+  Platform,
   SafeAreaView,
   ScrollView,
-  Platform 
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import LinearGradient from 'react-native-linear-gradient';
+import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
+  Easing,
+  interpolate,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
   withSequence,
-  withSpring,
   withTiming,
-  interpolate,
-  Easing,
 } from 'react-native-reanimated';
 import { theme, responsiveFontSize, responsiveSpacing, platformSelect } from '../utils/theme';
+import { SoundManager } from '../utils/SoundManager';
 
-const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
 
 interface MenuScreenProps {
   onStartNewGame: () => void;
+  onStartEndless: () => void;
   onContinueGame: () => void;
   onOpenSettings: () => void;
+  onOpenLevels: () => void;
+  onOpenTutorial: () => void;
+  onOpenStats: () => void;
   hasSavedGame: boolean;
   savedLevel?: number;
+  reducedMotion: boolean;
 }
 
-// Memoized animated pill component for better performance
-const AnimatedPill = memo(({ index, color }: { index: number; color: string[] }) => {
+const AmbientCapsule = memo(({ index, color }: { index: number; color: readonly [string, string, ...string[]] }) => {
   const translateY = useSharedValue(0);
   const translateX = useSharedValue(0);
   const opacity = useSharedValue(0);
 
   useEffect(() => {
-    // Fade in animation
-    opacity.value = withTiming(0.15, { duration: 1000 });
-    
-    // Floating animation with different timing for each pill
+    opacity.value = withTiming(0.16, { duration: 900 });
     translateY.value = withRepeat(
       withSequence(
-        withTiming(-30, { duration: 3000 + index * 500, easing: Easing.inOut(Easing.ease) }),
-        withTiming(0, { duration: 3000 + index * 500, easing: Easing.inOut(Easing.ease) })
+        withTiming(-18, { duration: 3600 + index * 420, easing: Easing.inOut(Easing.ease) }),
+        withTiming(0, { duration: 3600 + index * 420, easing: Easing.inOut(Easing.ease) })
       ),
       -1,
       true
     );
-
-    // Gentle horizontal movement
     translateX.value = withRepeat(
       withSequence(
-        withTiming(10, { duration: 4000 + index * 300, easing: Easing.inOut(Easing.ease) }),
-        withTiming(-10, { duration: 4000 + index * 300, easing: Easing.inOut(Easing.ease) })
+        withTiming(8, { duration: 4400 + index * 360, easing: Easing.inOut(Easing.ease) }),
+        withTiming(-8, { duration: 4400 + index * 360, easing: Easing.inOut(Easing.ease) })
       ),
       -1,
       true
@@ -65,178 +62,174 @@ const AnimatedPill = memo(({ index, color }: { index: number; color: string[] })
   }, [index]);
 
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateY: translateY.value },
-      { translateX: translateX.value },
-    ],
     opacity: opacity.value,
+    transform: [{ translateY: translateY.value }, { translateX: translateX.value }],
   }));
 
-  // Fixed positions for pills (no random values)
-  const positions = [
-    { top: '10%', left: '15%' },
-    { top: '25%', right: '20%' },
-    { top: '60%', left: '10%' },
+  const positions: Array<{ top: `${number}%`; left?: `${number}%`; right?: `${number}%` }> = [
+    { top: '12%', left: '12%' },
+    { top: '24%', right: '16%' },
+    { top: '66%', left: '8%' },
+    { top: '72%', right: '10%' },
   ];
 
-  const position = positions[index % positions.length];
-
   return (
-    <Animated.View style={[styles.floatingPill, position, animatedStyle]}>
-      <LinearGradient colors={color} style={styles.pillGradient} />
+    <Animated.View style={[styles.ambientCapsule, positions[index % positions.length], animatedStyle]}>
+      <LinearGradient colors={color} style={styles.ambientCapsuleFill} />
     </Animated.View>
   );
 });
 
+const CapsuleButton = ({
+  label,
+  sublabel,
+  onPress,
+  variant = 'primary',
+}: {
+  label: string;
+  sublabel?: string;
+  onPress: () => void;
+  variant?: 'primary' | 'secondary' | 'glass';
+}) => {
+  const colors =
+    variant === 'primary'
+      ? theme.colors.primary.redGradient
+      : variant === 'secondary'
+        ? theme.colors.successGradient
+        : (['rgba(255,255,255,0.18)', 'rgba(255,255,255,0.09)'] as const);
 
-export const MenuScreen: React.FC<MenuScreenProps> = ({ 
-  onStartNewGame, 
-  onContinueGame, 
-  onOpenSettings, 
+  const handlePress = () => {
+    SoundManager.getInstance().playButton();
+    onPress();
+  };
+
+  return (
+    <TouchableOpacity accessibilityRole="button" accessibilityLabel={label} onPress={handlePress} activeOpacity={0.86} style={styles.buttonShell}>
+      <LinearGradient colors={colors} style={[styles.capsuleButton, variant === 'glass' && styles.glassButton]}>
+        <Text style={styles.buttonText}>{label}</Text>
+        {sublabel && <Text style={styles.buttonSubtext}>{sublabel}</Text>}
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+};
+
+export const MenuScreen: React.FC<MenuScreenProps> = ({
+  onStartNewGame,
+  onStartEndless,
+  onContinueGame,
+  onOpenSettings,
+  onOpenLevels,
+  onOpenTutorial,
+  onOpenStats,
   hasSavedGame,
-  savedLevel 
+  savedLevel,
+  reducedMotion,
 }) => {
   const titleOpacity = useSharedValue(0);
   const contentOpacity = useSharedValue(0);
-  const [isContentVisible, setIsContentVisible] = React.useState(false);
 
   useEffect(() => {
-    // Smooth fade in for title
-    titleOpacity.value = withTiming(1, { duration: 800 });
-    
-    // Delay content appearance
-    setTimeout(() => {
-      setIsContentVisible(true);
-      contentOpacity.value = withTiming(1, { duration: 600 });
-    }, 400);
+    titleOpacity.value = withTiming(1, { duration: reducedMotion ? 1 : 780 });
+    contentOpacity.value = withTiming(1, { duration: reducedMotion ? 1 : 700 });
   }, []);
 
   const titleAnimatedStyle = useAnimatedStyle(() => ({
     opacity: titleOpacity.value,
-    transform: [{ translateY: interpolate(titleOpacity.value, [0, 1], [20, 0]) }],
+    transform: [{ translateY: interpolate(titleOpacity.value, [0, 1], [18, 0]) }],
   }));
 
   const contentAnimatedStyle = useAnimatedStyle(() => ({
     opacity: contentOpacity.value,
+    transform: [{ translateY: interpolate(contentOpacity.value, [0, 1], [16, 0]) }],
   }));
 
-  // Memoize pill colors to prevent recreation
-  const pillColors = useMemo(() => [
-    theme.colors.pill.red,
-    theme.colors.pill.blue,
-    theme.colors.pill.yellow,
-  ], []);
+  const pillColors = useMemo(
+    () => [theme.colors.pill.red, theme.colors.pill.blue, theme.colors.pill.yellow, theme.colors.successGradient],
+    []
+  );
 
   const content = (
     <View style={styles.innerContainer}>
-      {/* Optimized floating pills - only 3 for better performance */}
-      <View style={styles.floatingPillsContainer} pointerEvents="none">
-        {pillColors.map((color, index) => (
-          <AnimatedPill key={index} index={index} color={color} />
+      <View style={styles.ambientLayer} pointerEvents="none">
+        <View style={styles.labShelf} />
+        <View style={styles.bubbleOne} />
+        <View style={styles.bubbleTwo} />
+        {!reducedMotion && pillColors.map((color, index) => (
+          <AmbientCapsule key={index} index={index} color={color} />
         ))}
       </View>
 
+      <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open settings" onPress={onOpenSettings} activeOpacity={0.8} style={styles.settingsButton}>
+        <Text style={styles.settingsIcon}>...</Text>
+      </TouchableOpacity>
+
       <Animated.View style={[styles.titleContainer, titleAnimatedStyle]}>
-        <Text style={styles.title}>PILL</Text>
-        <Text style={styles.titleAccent}>PANIC</Text>
-        <Text style={styles.subtitle}>A Dr. Mario inspired puzzle game</Text>
+        <View style={styles.logoMark}>
+          <LinearGradient colors={theme.colors.primary.redGradient} style={styles.logoCapsule} />
+          <View style={styles.logoMicrobe}>
+            <View style={styles.logoMicrobeEye} />
+            <View style={styles.logoMicrobeEye} />
+          </View>
+        </View>
+        <Text style={styles.title}>Pill</Text>
+        <Text style={styles.titleAccent}>Panic</Text>
+        <Text style={styles.subtitle}>A bright capsule puzzle lab</Text>
       </Animated.View>
 
       <Animated.View style={[styles.contentWrapper, contentAnimatedStyle]}>
+        {hasSavedGame && (
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Continue level ${savedLevel}`} onPress={onContinueGame} activeOpacity={0.86} style={styles.continueChip}>
+            <Text style={styles.continueText}>Continue level {savedLevel}</Text>
+          </TouchableOpacity>
+        )}
+
         <View style={styles.menuButtonsContainer}>
-          {hasSavedGame && (
-            <TouchableOpacity
-              onPress={onContinueGame}
-              activeOpacity={0.8}
-              style={styles.menuButton}
-            >
-              <LinearGradient
-                colors={theme.colors.successGradient}
-                style={styles.continueButton}
-              >
-                <Text style={styles.continueButtonText}>CONTINUE</Text>
-                <Text style={styles.continueSubtext}>Level {savedLevel}</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-          )}
-          
-          <TouchableOpacity
-            onPress={onStartNewGame}
-            activeOpacity={0.8}
-            style={styles.menuButton}
-          >
-            <LinearGradient
-              colors={theme.colors.secondary.blueGradient}
-              style={styles.button}
-            >
-              <Text style={styles.buttonText}>NEW GAME</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            onPress={onOpenSettings}
-            activeOpacity={0.8}
-            style={styles.menuButton}
-          >
-            <LinearGradient
-              colors={['rgba(255,255,255,0.2)', 'rgba(255,255,255,0.1)']}
-              style={styles.button}
-            >
-              <Text style={styles.buttonText}>SETTINGS</Text>
-            </LinearGradient>
-          </TouchableOpacity>
+          <CapsuleButton label="Play" onPress={onOpenLevels} />
+          <CapsuleButton
+            label="Endless"
+            sublabel="Waves keep coming"
+            onPress={onStartEndless}
+            variant="glass"
+          />
         </View>
 
-        <View style={styles.instructionsCard}>
-          <LinearGradient
-            colors={['rgba(255, 255, 255, 0.1)', 'rgba(255, 255, 255, 0.05)']}
-            style={styles.instructionsGradient}
-          >
-            <Text style={styles.instructionTitle}>How to Play</Text>
-            <View style={styles.instructionsList}>
-              <View style={styles.instructionRow}>
-                <View style={styles.instructionDot} />
-                <Text style={styles.instructionText}>Match 4 or more same-colored blocks</Text>
-              </View>
-              <View style={styles.instructionRow}>
-                <View style={styles.instructionDot} />
-                <Text style={styles.instructionText}>Clear all viruses to win</Text>
-              </View>
-              <View style={styles.instructionRow}>
-                <View style={styles.instructionDot} />
-                <Text style={styles.instructionText}>
-                  {isWeb ? 'Click to rotate, arrow keys to move' : 'Tap to rotate, swipe to move'}
-                </Text>
-              </View>
-              <View style={styles.instructionRow}>
-                <View style={styles.instructionDot} />
-                <Text style={styles.instructionText}>
-                  {isWeb ? 'Press down arrow to drop' : 'Swipe down fast to drop'}
-                </Text>
-              </View>
+        <View style={styles.utilityRow}>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="How to play" onPress={onOpenTutorial} style={styles.utilityButton}><Text style={styles.utilityIcon}>?</Text><Text style={styles.utilityText}>How to play</Text></TouchableOpacity>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Open lab notes" onPress={onOpenStats} style={styles.utilityButton}><Text style={styles.utilityIcon}>#</Text><Text style={styles.utilityText}>Lab notes</Text></TouchableOpacity>
+        </View>
+
+        <View style={styles.tutorialStrip}>
+          <View style={styles.tutorialStep}>
+            <View style={[styles.tutorialPill, styles.tutorialPillRed]} />
+            <Text style={styles.tutorialText}>Match four</Text>
+          </View>
+          <View style={styles.tutorialStep}>
+            <View style={styles.microbeIcon}>
+              <View style={styles.microbeEye} />
+              <View style={styles.microbeEye} />
             </View>
-          </LinearGradient>
+            <Text style={styles.tutorialText}>Clear microbes</Text>
+          </View>
+          <View style={styles.tutorialStep}>
+            <View style={[styles.tutorialPill, styles.tutorialPillMint]} />
+            <Text style={styles.tutorialText}>{isWeb ? 'Keys to move' : 'Swipe to move'}</Text>
+          </View>
         </View>
       </Animated.View>
     </View>
   );
 
   return (
-    <LinearGradient
-      colors={[theme.colors.background, theme.colors.backgroundLight]}
-      style={styles.container}
-    >
+    <LinearGradient colors={[theme.colors.background, theme.colors.backgroundLight]} style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
-        {isWeb && screenWidth > 768 ? (
-          <ScrollView 
-            contentContainerStyle={styles.scrollContainer}
-            showsVerticalScrollIndicator={false}
-          >
-            {content}
-          </ScrollView>
-        ) : (
-          content
-        )}
+        <ScrollView
+          contentContainerStyle={styles.scrollContainer}
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+          contentInsetAdjustmentBehavior="never"
+        >
+          {content}
+        </ScrollView>
       </SafeAreaView>
     </LinearGradient>
   );
@@ -258,190 +251,267 @@ const styles = StyleSheet.create({
   innerContainer: {
     flex: 1,
     width: '100%',
-    maxWidth: theme.dimensions.maxContentWidth,
+    maxWidth: 680,
     alignSelf: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: responsiveSpacing(20),
   },
-  floatingPillsContainer: {
+  ambientLayer: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+  },
+  labShelf: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    left: '10%',
+    right: '10%',
+    bottom: '16%',
+    height: platformSelect({ web: 120, default: 88 }),
+    borderRadius: theme.borderRadius.xl,
+    backgroundColor: 'rgba(247,251,248,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
   },
-  floatingPill: {
+  bubbleOne: {
     position: 'absolute',
-    width: platformSelect({ web: 80, default: 60 }),
-    height: platformSelect({ web: 25, default: 20 }),
-    borderRadius: platformSelect({ web: 12, default: 10 }),
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    top: '19%',
+    left: '28%',
+    backgroundColor: 'rgba(88,214,183,0.18)',
   },
-  pillGradient: {
+  bubbleTwo: {
+    position: 'absolute',
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    top: '33%',
+    right: '26%',
+    backgroundColor: 'rgba(255,216,90,0.18)',
+  },
+  ambientCapsule: {
+    position: 'absolute',
+    width: platformSelect({ web: 84, default: 62 }),
+    height: platformSelect({ web: 28, default: 22 }),
+    borderRadius: theme.borderRadius.round,
+    transform: [{ rotate: '-18deg' }],
+  },
+  ambientCapsuleFill: {
     flex: 1,
-    borderRadius: platformSelect({ web: 12, default: 10 }),
+    borderRadius: theme.borderRadius.round,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+  },
+  settingsButton: {
+    position: 'absolute',
+    top: responsiveSpacing(12),
+    right: responsiveSpacing(20),
+    width: 48,
+    height: 48,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceGlass,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    zIndex: 2,
+  },
+  settingsIcon: {
+    color: theme.colors.text.primary,
+    fontSize: responsiveFontSize(22),
+    fontWeight: '900',
+    lineHeight: 22,
   },
   titleContainer: {
     alignItems: 'center',
-    marginTop: responsiveSpacing(platformSelect({ web: 40, default: 60 })),
-    marginBottom: responsiveSpacing(40),
+    marginBottom: responsiveSpacing(34),
+  },
+  logoMark: {
+    width: 94,
+    height: 70,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: responsiveSpacing(8),
+  },
+  logoCapsule: {
+    position: 'absolute',
+    width: 82,
+    height: 30,
+    borderRadius: theme.borderRadius.round,
+    transform: [{ rotate: '-28deg' }],
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.45)',
+  },
+  logoMicrobe: {
+    position: 'absolute',
+    right: 6,
+    bottom: 0,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: theme.colors.mint,
+    borderWidth: 3,
+    borderColor: theme.colors.background,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  logoMicrobeEye: {
+    width: 5,
+    height: 7,
+    borderRadius: 3,
+    backgroundColor: theme.colors.text.dark,
   },
   title: {
-    fontSize: responsiveFontSize(platformSelect({ web: 56, default: 64 })),
+    fontSize: responsiveFontSize(platformSelect({ web: 58, default: 64 })),
     fontWeight: '900',
-    color: theme.colors.primary.red,
-    letterSpacing: 4,
-    textShadowColor: theme.colors.primary.redDark,
-    textShadowOffset: { width: 0, height: 4 },
-    textShadowRadius: 8,
+    color: theme.colors.text.primary,
+    lineHeight: responsiveFontSize(platformSelect({ web: 58, default: 64 })),
   },
   titleAccent: {
-    fontSize: responsiveFontSize(platformSelect({ web: 56, default: 64 })),
+    fontSize: responsiveFontSize(platformSelect({ web: 58, default: 64 })),
     fontWeight: '900',
-    color: theme.colors.secondary.blue,
-    letterSpacing: 4,
-    marginTop: -responsiveSpacing(20),
-    textShadowColor: theme.colors.secondary.blueDark,
-    textShadowOffset: { width: 0, height: 4 },
-    textShadowRadius: 8,
+    color: theme.colors.primary.red,
+    lineHeight: responsiveFontSize(platformSelect({ web: 58, default: 64 })),
+    marginTop: -responsiveSpacing(4),
   },
   subtitle: {
-    fontSize: responsiveFontSize(18),
+    fontSize: responsiveFontSize(17),
     color: theme.colors.text.secondary,
-    marginTop: responsiveSpacing(16),
-    fontWeight: '500',
+    marginTop: responsiveSpacing(12),
+    fontWeight: '600',
   },
   contentWrapper: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: responsiveSpacing(20),
+    alignItems: 'center',
+  },
+  continueChip: {
+    paddingHorizontal: responsiveSpacing(18),
+    paddingVertical: responsiveSpacing(10),
+    borderRadius: theme.borderRadius.round,
+    backgroundColor: 'rgba(88,214,183,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(88,214,183,0.34)',
+    marginBottom: responsiveSpacing(14),
+  },
+  continueText: {
+    color: theme.colors.text.primary,
+    fontSize: responsiveFontSize(15),
+    fontWeight: '800',
   },
   menuButtonsContainer: {
-    marginBottom: responsiveSpacing(40),
-    alignItems: 'center',
-    gap: responsiveSpacing(16),
-  },
-  menuButton: {
     width: '100%',
-    maxWidth: 300,
+    maxWidth: 320,
+    gap: responsiveSpacing(14),
   },
-  instructionsCard: {
-    borderRadius: theme.borderRadius.xl,
-    overflow: 'hidden',
-    ...theme.shadows.lg,
-    maxWidth: platformSelect({ web: 600, default: '100%' }),
-    alignSelf: 'center',
+  buttonShell: {
     width: '100%',
   },
-  instructionsGradient: {
-    padding: responsiveSpacing(24),
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: theme.borderRadius.xl,
-  },
-  instructionTitle: {
-    fontSize: responsiveFontSize(24),
-    fontWeight: '700',
-    color: theme.colors.text.primary,
-    marginBottom: responsiveSpacing(20),
-    textAlign: 'center',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  instructionsList: {
-    gap: responsiveSpacing(12),
-  },
-  instructionRow: {
-    flexDirection: 'row',
+  capsuleButton: {
+    minHeight: 58,
+    paddingHorizontal: responsiveSpacing(28),
+    paddingVertical: responsiveSpacing(15),
+    borderRadius: theme.borderRadius.round,
     alignItems: 'center',
-    gap: responsiveSpacing(12),
-  },
-  instructionDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: theme.colors.success,
-  },
-  instructionText: {
-    fontSize: responsiveFontSize(16),
-    color: theme.colors.text.secondary,
-    flex: 1,
-  },
-  speedContainer: {
-    marginBottom: responsiveSpacing(30),
-    alignItems: 'center',
-  },
-  speedTitle: {
-    fontSize: responsiveFontSize(24),
-    fontWeight: '700',
-    color: theme.colors.text.primary,
-    marginBottom: responsiveSpacing(16),
-    textAlign: 'center',
-    textTransform: 'uppercase',
-    letterSpacing: 2,
-  },
-  speedButtons: {
-    flexDirection: 'row',
     justifyContent: 'center',
-    gap: responsiveSpacing(12),
-    marginBottom: responsiveSpacing(12),
-  },
-  speedButton: {
-    paddingHorizontal: responsiveSpacing(20),
-    paddingVertical: responsiveSpacing(12),
-    borderRadius: theme.borderRadius.md,
-    minWidth: responsiveSpacing(80),
-    alignItems: 'center',
-    ...theme.shadows.sm,
-  },
-  selectedSpeedButton: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.24)',
     ...theme.shadows.md,
   },
-  speedButtonText: {
-    fontSize: responsiveFontSize(16),
-    fontWeight: '600',
-    color: theme.colors.text.secondary,
-    textTransform: 'capitalize',
-  },
-  selectedSpeedButtonText: {
-    color: theme.colors.text.primary,
-    fontWeight: '700',
-  },
-  speedDescription: {
-    fontSize: responsiveFontSize(14),
-    color: theme.colors.text.secondary,
-    textAlign: 'center',
-    fontStyle: 'italic',
-    maxWidth: 300,
-  },
-  button: {
-    paddingHorizontal: responsiveSpacing(40),
-    paddingVertical: responsiveSpacing(18),
-    borderRadius: theme.borderRadius.xl,
-    alignItems: 'center',
-    ...theme.shadows.md,
+  glassButton: {
+    shadowOpacity: 0.12,
   },
   buttonText: {
     color: theme.colors.text.primary,
-    fontSize: responsiveFontSize(20),
-    fontWeight: '800',
-    letterSpacing: 1,
+    fontSize: responsiveFontSize(19),
+    fontWeight: '900',
   },
-  continueButton: {
-    paddingHorizontal: responsiveSpacing(40),
-    paddingVertical: responsiveSpacing(18),
-    borderRadius: theme.borderRadius.xl,
+  buttonSubtext: {
+    color: theme.colors.text.secondary,
+    fontSize: responsiveFontSize(12),
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  tutorialStrip: {
+    width: '100%',
+    maxWidth: 480,
+    marginTop: responsiveSpacing(28),
+    padding: responsiveSpacing(14),
+    borderRadius: theme.borderRadius.lg,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.11)',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: responsiveSpacing(10),
+  },
+  utilityRow: {
+    width: '100%',
+    maxWidth: 320,
+    marginTop: responsiveSpacing(14),
+    flexDirection: 'row',
+    gap: responsiveSpacing(10),
+  },
+  utilityButton: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: theme.borderRadius.lg,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.09)',
+    flexDirection: 'row',
     alignItems: 'center',
-    ...theme.shadows.lg,
+    justifyContent: 'center',
+    gap: responsiveSpacing(7),
   },
-  continueButtonText: {
-    color: theme.colors.text.primary,
-    fontSize: responsiveFontSize(20),
+  utilityIcon: {
+    color: theme.colors.mint,
+    fontSize: responsiveFontSize(15),
+    fontWeight: '900',
+  },
+  utilityText: {
+    color: theme.colors.text.secondary,
+    fontSize: responsiveFontSize(12),
     fontWeight: '800',
-    letterSpacing: 1,
   },
-  continueSubtext: {
-    color: theme.colors.text.primary,
-    fontSize: responsiveFontSize(14),
-    fontWeight: '600',
-    marginTop: 4,
-    opacity: 0.9,
+  tutorialStep: {
+    flex: 1,
+    alignItems: 'center',
+    gap: responsiveSpacing(8),
+  },
+  tutorialPill: {
+    width: 42,
+    height: 18,
+    borderRadius: theme.borderRadius.round,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.28)',
+  },
+  tutorialPillRed: {
+    backgroundColor: theme.colors.primary.red,
+  },
+  tutorialPillMint: {
+    backgroundColor: theme.colors.mint,
+  },
+  microbeIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: theme.colors.tertiary.yellow,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  microbeEye: {
+    width: 4,
+    height: 5,
+    borderRadius: 2,
+    backgroundColor: theme.colors.text.dark,
+  },
+  tutorialText: {
+    color: theme.colors.text.secondary,
+    fontSize: responsiveFontSize(12),
+    fontWeight: '800',
+    textAlign: 'center',
   },
 });

@@ -1,13 +1,13 @@
 import React, { useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView } from 'react-native';
-import LinearGradient from 'react-native-linear-gradient';
+import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
+  interpolate,
   useAnimatedStyle,
   useSharedValue,
+  withSequence,
   withSpring,
   withTiming,
-  withSequence,
-  interpolate,
 } from 'react-native-reanimated';
 import { theme, responsiveFontSize, responsiveSpacing } from '../utils/theme';
 
@@ -18,6 +18,7 @@ interface GameOverScreenProps {
   onRestart: () => void;
   onNextLevel?: () => void;
   onBackToMenu: () => void;
+  reducedMotion?: boolean;
 }
 
 const AnimatedTouchableOpacity = Animated.createAnimatedComponent(TouchableOpacity);
@@ -29,26 +30,29 @@ export const GameOverScreen: React.FC<GameOverScreenProps> = ({
   onRestart,
   onNextLevel,
   onBackToMenu,
+  reducedMotion = false,
 }) => {
-  console.log('GameOverScreen mounted:', { isWin, score, level, hasNextLevel: !!onNextLevel });
-  
   const titleScale = useSharedValue(0);
   const contentOpacity = useSharedValue(0);
   const buttonScale = useSharedValue(0);
 
   useEffect(() => {
+    if (reducedMotion) {
+      titleScale.value = 1;
+      contentOpacity.value = 1;
+      buttonScale.value = 1;
+      return;
+    }
     titleScale.value = withSequence(
-      withSpring(1.2, { damping: 10, stiffness: 200 }),
-      withSpring(1, { damping: 15, stiffness: 150 })
+      withSpring(1.04, { damping: 12, stiffness: 180 }),
+      withSpring(1, { damping: 16, stiffness: 150 })
     );
-    
-    contentOpacity.value = withTiming(1, { duration: 800 });
-    
+    contentOpacity.value = withTiming(1, { duration: 700 });
     buttonScale.value = withSequence(
-      withTiming(0, { duration: 400 }),
-      withSpring(1, { damping: 10, stiffness: 150 })
+      withTiming(0, { duration: 260 }),
+      withSpring(1, { damping: 12, stiffness: 160 })
     );
-  }, []);
+  }, [reducedMotion]);
 
   const titleAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: titleScale.value }],
@@ -57,112 +61,75 @@ export const GameOverScreen: React.FC<GameOverScreenProps> = ({
 
   const contentAnimatedStyle = useAnimatedStyle(() => ({
     opacity: contentOpacity.value,
+    transform: [{ translateY: interpolate(contentOpacity.value, [0, 1], [14, 0]) }],
   }));
 
-  const ButtonComponent = ({ 
-    onPress, 
-    colors, 
-    text, 
-    index 
-  }: { 
-    onPress: () => void; 
-    colors: string[]; 
-    text: string; 
-    index: number;
-  }) => {
-    const animatedStyle = useAnimatedStyle(() => ({
-      transform: [
-        { scale: interpolate(buttonScale.value, [0, 1], [0, 1]) },
-        { translateY: interpolate(buttonScale.value, [0, 1], [50, 0]) },
-      ],
-      opacity: interpolate(buttonScale.value, [0, 1], [0, 1]),
-    }));
+  const buttonAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { scale: interpolate(buttonScale.value, [0, 1], [0.96, 1]) },
+      { translateY: interpolate(buttonScale.value, [0, 1], [20, 0]) },
+    ],
+    opacity: interpolate(buttonScale.value, [0, 1], [0, 1]),
+  }));
 
-    return (
-      <AnimatedTouchableOpacity
-        style={[animatedStyle, { zIndex: -index }]}
-        onPress={onPress}
-        activeOpacity={0.8}
-      >
-        <LinearGradient
-          colors={colors}
-          style={styles.button}
-        >
-          <Text style={styles.buttonText}>{text}</Text>
-        </LinearGradient>
-      </AnimatedTouchableOpacity>
-    );
-  };
+  const primaryAction = isWin && onNextLevel ? onNextLevel : onRestart;
+  const primaryLabel = isWin && onNextLevel ? 'Continue' : 'Retry';
 
   return (
-    <LinearGradient
-      colors={[theme.colors.background, theme.colors.backgroundLight]}
-      style={styles.container}
-    >
+    <LinearGradient colors={[theme.colors.background, theme.colors.backgroundLight]} style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.content}>
+          <View style={styles.ambientTray}>
+            <View style={[styles.resultSeal, isWin ? styles.winSeal : styles.loseSeal]}>
+              <View style={styles.resultSealInner} />
+            </View>
+          </View>
+
           <Animated.View style={[styles.titleContainer, titleAnimatedStyle]}>
-            <Text style={[
-              styles.title,
-              isWin ? styles.winTitle : styles.loseTitle
-            ]}>
-              {isWin ? 'LEVEL' : 'GAME'}
+            <Text style={styles.kicker}>{isWin ? 'Level complete' : 'Run ended'}</Text>
+            <Text style={[styles.title, isWin ? styles.winTitle : styles.loseTitle]}>
+              {isWin ? 'Lab Cleared' : 'Lab Overflow'}
             </Text>
-            <Text style={[
-              styles.titleAccent,
-              isWin ? styles.winTitle : styles.loseTitle
-            ]}>
-              {isWin ? 'COMPLETE!' : 'OVER'}
+            <Text style={styles.subtitle}>
+              {isWin ? 'The tray is clean and ready for the next mix.' : 'So close. Reset the tray and try another run.'}
             </Text>
           </Animated.View>
-          
+
           <Animated.View style={[styles.statsCard, contentAnimatedStyle]}>
-            <LinearGradient
-              colors={['rgba(255,255,255,0.1)', 'rgba(255,255,255,0.05)']}
-              style={styles.statsGradient}
-            >
-              <View style={styles.statRow}>
+            <View style={styles.scoreMeter}>
+              <Text style={styles.scoreLabel}>Score</Text>
+              <Text style={styles.scoreValue}>{score}</Text>
+            </View>
+            <View style={styles.statGrid}>
+              <View style={styles.statTile}>
                 <Text style={styles.statLabel}>Level</Text>
                 <Text style={styles.statValue}>{level}</Text>
               </View>
-              <View style={styles.divider} />
-              <View style={styles.statRow}>
-                <Text style={styles.statLabel}>Final Score</Text>
-                <Text style={styles.statValue}>{score}</Text>
+              <View style={styles.statTile}>
+                <Text style={styles.statLabel}>Seal</Text>
+                <Text style={styles.statValue}>{isWin ? 'Clean' : 'Ready'}</Text>
               </View>
-              {isWin && (
-                <>
-                  <View style={styles.divider} />
-                  <Text style={styles.congratsText}>🎉 Congratulations! 🎉</Text>
-                </>
-              )}
-            </LinearGradient>
+            </View>
           </Animated.View>
-          
-          <View style={styles.buttonContainer}>
-            {isWin && onNextLevel && (
-              <ButtonComponent
-                onPress={onNextLevel}
-                colors={theme.colors.successGradient}
-                text="NEXT LEVEL"
-                index={0}
-              />
-            )}
-            
-            <ButtonComponent
-              onPress={onRestart}
-              colors={theme.colors.secondary.blueGradient}
-              text="TRY AGAIN"
-              index={1}
-            />
-            
-            <ButtonComponent
-              onPress={onBackToMenu}
-              colors={['#666', '#444']}
-              text="MAIN MENU"
-              index={2}
-            />
-          </View>
+
+          <Animated.View style={[styles.buttonContainer, buttonAnimatedStyle]}>
+            <AnimatedTouchableOpacity accessibilityRole="button" accessibilityLabel={primaryLabel} onPress={primaryAction} activeOpacity={0.84}>
+              <LinearGradient colors={isWin ? theme.colors.successGradient : theme.colors.primary.redGradient} style={styles.primaryButton}>
+                <Text style={styles.primaryButtonText}>{primaryLabel}</Text>
+              </LinearGradient>
+            </AnimatedTouchableOpacity>
+
+            <View style={styles.secondaryRow}>
+              {isWin && (
+                <TouchableOpacity accessibilityRole="button" accessibilityLabel="Replay level" onPress={onRestart} activeOpacity={0.84} style={styles.secondaryButton}>
+                  <Text style={styles.secondaryButtonText}>Replay</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity accessibilityRole="button" accessibilityLabel="Return to menu" onPress={onBackToMenu} activeOpacity={0.84} style={styles.secondaryButton}>
+                <Text style={styles.secondaryButtonText}>Menu</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
         </View>
       </SafeAreaView>
     </LinearGradient>
@@ -182,90 +149,164 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: responsiveSpacing(20),
   },
+  ambientTray: {
+    position: 'absolute',
+    width: '78%',
+    maxWidth: 420,
+    height: 160,
+    top: '14%',
+    borderRadius: theme.borderRadius.xl,
+    backgroundColor: 'rgba(247,251,248,0.07)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+  },
+  resultSeal: {
+    position: 'absolute',
+    alignSelf: 'center',
+    top: -28,
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: 'rgba(255,255,255,0.26)',
+    ...theme.shadows.md,
+  },
+  winSeal: {
+    backgroundColor: theme.colors.success,
+  },
+  loseSeal: {
+    backgroundColor: theme.colors.primary.red,
+  },
+  resultSealInner: {
+    width: 42,
+    height: 18,
+    borderRadius: theme.borderRadius.round,
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    transform: [{ rotate: '-24deg' }],
+  },
   titleContainer: {
     alignItems: 'center',
-    marginBottom: responsiveSpacing(40),
+    marginBottom: responsiveSpacing(24),
+    maxWidth: 420,
+  },
+  kicker: {
+    color: theme.colors.text.secondary,
+    fontSize: responsiveFontSize(13),
+    fontWeight: '900',
+    marginBottom: responsiveSpacing(8),
   },
   title: {
-    fontSize: responsiveFontSize(56),
+    fontSize: responsiveFontSize(42),
     fontWeight: '900',
-    letterSpacing: 4,
-    textShadowOffset: { width: 0, height: 4 },
-    textShadowRadius: 8,
-  },
-  titleAccent: {
-    fontSize: responsiveFontSize(56),
-    fontWeight: '900',
-    letterSpacing: 4,
-    marginTop: -responsiveSpacing(16),
-    textShadowOffset: { width: 0, height: 4 },
-    textShadowRadius: 8,
+    textAlign: 'center',
   },
   winTitle: {
     color: theme.colors.success,
-    textShadowColor: 'rgba(78, 205, 196, 0.5)',
   },
   loseTitle: {
-    color: theme.colors.error,
-    textShadowColor: 'rgba(255, 107, 107, 0.5)',
+    color: theme.colors.primary.red,
+  },
+  subtitle: {
+    color: theme.colors.text.secondary,
+    fontSize: responsiveFontSize(15),
+    fontWeight: '700',
+    lineHeight: responsiveFontSize(21),
+    textAlign: 'center',
+    marginTop: responsiveSpacing(10),
   },
   statsCard: {
     width: '100%',
-    marginBottom: responsiveSpacing(40),
+    maxWidth: 380,
+    marginBottom: responsiveSpacing(24),
     borderRadius: theme.borderRadius.xl,
-    overflow: 'hidden',
-    ...theme.shadows.lg,
-  },
-  statsGradient: {
-    padding: responsiveSpacing(24),
+    padding: responsiveSpacing(18),
+    backgroundColor: theme.colors.surfaceGlass,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: theme.borderRadius.xl,
-  },
-  statRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: responsiveSpacing(12),
-  },
-  statLabel: {
-    fontSize: responsiveFontSize(18),
-    color: theme.colors.text.secondary,
-    fontWeight: '600',
-  },
-  statValue: {
-    fontSize: responsiveFontSize(28),
-    color: theme.colors.text.primary,
-    fontWeight: '800',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    marginVertical: responsiveSpacing(8),
-  },
-  congratsText: {
-    fontSize: responsiveFontSize(20),
-    color: theme.colors.success,
-    fontWeight: '700',
-    textAlign: 'center',
-    marginTop: responsiveSpacing(8),
-  },
-  buttonContainer: {
-    gap: responsiveSpacing(16),
-    width: '100%',
-    maxWidth: 300,
-  },
-  button: {
-    paddingHorizontal: responsiveSpacing(40),
-    paddingVertical: responsiveSpacing(18),
-    borderRadius: theme.borderRadius.xl,
-    alignItems: 'center',
+    borderColor: 'rgba(255,255,255,0.12)',
     ...theme.shadows.md,
   },
-  buttonText: {
+  scoreMeter: {
+    minHeight: 88,
+    borderRadius: theme.borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(88,214,183,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(88,214,183,0.30)',
+    marginBottom: responsiveSpacing(12),
+  },
+  scoreLabel: {
+    color: theme.colors.text.secondary,
+    fontSize: responsiveFontSize(13),
+    fontWeight: '900',
+  },
+  scoreValue: {
+    color: theme.colors.text.primary,
+    fontSize: responsiveFontSize(34),
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  statGrid: {
+    flexDirection: 'row',
+    gap: responsiveSpacing(10),
+  },
+  statTile: {
+    flex: 1,
+    padding: responsiveSpacing(13),
+    borderRadius: theme.borderRadius.lg,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.09)',
+  },
+  statLabel: {
+    color: theme.colors.text.secondary,
+    fontSize: responsiveFontSize(12),
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  statValue: {
     color: theme.colors.text.primary,
     fontSize: responsiveFontSize(18),
-    fontWeight: '800',
-    letterSpacing: 1,
+    fontWeight: '900',
+  },
+  buttonContainer: {
+    width: '100%',
+    maxWidth: 320,
+    gap: responsiveSpacing(12),
+  },
+  primaryButton: {
+    minHeight: 58,
+    borderRadius: theme.borderRadius.round,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.24)',
+    ...theme.shadows.md,
+  },
+  primaryButtonText: {
+    color: theme.colors.text.primary,
+    fontSize: responsiveFontSize(18),
+    fontWeight: '900',
+  },
+  secondaryRow: {
+    flexDirection: 'row',
+    gap: responsiveSpacing(10),
+  },
+  secondaryButton: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: theme.borderRadius.round,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceGlass,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  secondaryButtonText: {
+    color: theme.colors.text.primary,
+    fontSize: responsiveFontSize(15),
+    fontWeight: '900',
   },
 });

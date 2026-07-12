@@ -7,6 +7,7 @@ node_modules/
 .expo/
 dist/
 web-build/
+expo-env.d.ts
 
 # Native
 .kotlin/
@@ -34,22 +35,3 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
-
-# ROM archives (never commit these)
-*.7z
-*.nds
-
-# iCloud sync duplicates ("file 2.ext" copies)
-* 2
-* 2.*
-
-# build outputs
-build/
-*.backup
-
-# CocoaPods & ruby gems
-Pods/
-**/vendor/bundle/
-
-# Xcode local env
-.xcode.env.local

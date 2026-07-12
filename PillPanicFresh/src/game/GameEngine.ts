@@ -54,9 +54,7 @@ export class GameEngine {
   private currentFallSpeed: number = BASE_FALL_SPEEDS.MEDIUM;
   private spawnCooldown: number = 0;
   private combo: number = 0;
-  // One grab anchor per held piece, so multi-touch (a finger on each of two
-  // pieces) can't strand a piece in the held state
-  private grabStarts: Map<string, Position> = new Map();
+  private grabStart: Position | null = null;
   private onStateChange?: (state: GameState) => void;
   private onStatsChange?: (stats: GameStats) => void;
   private onBoardChange?: () => void;
@@ -76,11 +74,9 @@ export class GameEngine {
     onStatsChange?: (stats: GameStats) => void;
     onBoardChange?: () => void;
   }) {
-    // Merge, don't replace: the screen registers state/stats callbacks and
-    // the board registers its own high-frequency change callback
-    if (callbacks.onStateChange) this.onStateChange = callbacks.onStateChange;
-    if (callbacks.onStatsChange) this.onStatsChange = callbacks.onStatsChange;
-    if (callbacks.onBoardChange) this.onBoardChange = callbacks.onBoardChange;
+    this.onStateChange = callbacks.onStateChange;
+    this.onStatsChange = callbacks.onStatsChange;
+    this.onBoardChange = callbacks.onBoardChange;
   }
 
   startGame(level: number = 1, speedSetting: SpeedSetting = SpeedSetting.MEDIUM, initialScore: number = 0): void {
@@ -98,7 +94,7 @@ export class GameEngine {
     this.stats.virusCount = this.board.countViruses();
     this.fallingPills = [];
     this.selectedPill = null;
-    this.grabStarts.clear();
+    this.grabStart = null;
     this.combo = 0;
     this.nextPill = Pill.generateRandomPill();
     this.baseFallSpeed = BASE_FALL_SPEEDS[speedSetting];
@@ -298,10 +294,9 @@ export class GameEngine {
 
     this.selectedPill = pill;
     pill.held = true;
-    pill.fastDrop = false;
     // Fold current sub-cell progress into the drag offset so the piece
     // doesn't visually snap when grabbed
-    this.grabStarts.set(pillId, { x: pill.position.x, y: pill.position.y + pill.fallOffset });
+    this.grabStart = { x: pill.position.x, y: pill.position.y + pill.fallOffset };
     pill.dragOffsetX = 0;
     pill.dragOffsetY = pill.fallOffset;
     pill.fallOffset = 0;
@@ -313,14 +308,13 @@ export class GameEngine {
   // the grab, in cell units. Movement is committed cell-by-cell with
   // collision checks; the fractional remainder is a visual lean only.
   // Pieces can move sideways and down, never up (as in Germ Buster).
-  dragHeldPill(pillId: string, translationX: number, translationY: number): void {
+  dragHeldPill(translationX: number, translationY: number): void {
+    const pill = this.selectedPill;
+    if (!pill || !pill.held || !pill.isActive || !this.grabStart) return;
     if (this.gameState !== GameState.PLAYING) return;
-    const pill = this.fallingPills.find(p => p.id === pillId && p.isActive);
-    const grabStart = pill ? this.grabStarts.get(pillId) : undefined;
-    if (!pill || !pill.held || !grabStart) return;
 
-    const targetX = grabStart.x + translationX;
-    const targetY = grabStart.y + translationY;
+    const targetX = this.grabStart.x + translationX;
+    const targetY = this.grabStart.y + translationY;
 
     let guard = BOARD_WIDTH;
     while (guard-- > 0 && Math.round(targetX) > pill.position.x && this.canPieceMove(pill, 1, 0)) {
@@ -349,16 +343,13 @@ export class GameEngine {
     this.notifyBoardChange();
   }
 
-  // Finger lifted: the piece resumes falling from where it was left. A fast
-  // downward flick sends it into fast drop so it slams into place.
-  releaseHeldPill(pillId: string, flickDown: boolean = false): void {
-    this.grabStarts.delete(pillId);
-    const pill = this.fallingPills.find(p => p.id === pillId);
+  // Finger lifted: the piece resumes falling from where it was left
+  releaseHeldPill(): void {
+    const pill = this.selectedPill;
     if (!pill || !pill.held) return;
 
     pill.held = false;
-    const canFall = pill.canMove(this.board, 0, 1);
-    if (!canFall) {
+    if (!pill.canMove(this.board, 0, 1)) {
       // Resting on settled pieces: start the lock timer partway through so
       // the piece settles quickly after release
       pill.fallOffset = GROUNDED_RELEASE_LOCK;
@@ -370,10 +361,9 @@ export class GameEngine {
     }
     pill.dragOffsetX = 0;
     pill.dragOffsetY = 0;
-    pill.fastDrop = flickDown && canFall;
-    if (this.selectedPill === pill) {
-      this.selectedPill = null;
-    }
+    pill.fastDrop = false;
+    this.selectedPill = null;
+    this.grabStart = null;
     this.notifyBoardChange();
   }
 

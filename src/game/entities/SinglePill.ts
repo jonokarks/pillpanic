@@ -7,14 +7,24 @@ export class SinglePill implements Controllable {
   position: Position;
   color: Color;
   isActive: boolean;
-  isUserControllable: boolean; // Split pills are not user-controllable
+  isUserControllable: boolean;
+  fallOffset: number;
+  held: boolean;
+  fastDrop: boolean;
+  dragOffsetX: number;
+  dragOffsetY: number;
 
-  constructor(color: Color, position: Position, isUserControllable: boolean = false) {
-    this.id = `single-${Date.now()}-${Math.random()}`;
+  constructor(color: Color, position: Position, isUserControllable: boolean = true) {
+    this.id = `single-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.position = { ...position };
     this.color = color;
     this.isActive = true;
     this.isUserControllable = isUserControllable;
+    this.fallOffset = 0;
+    this.held = false;
+    this.fastDrop = false;
+    this.dragOffsetX = 0;
+    this.dragOffsetY = 0;
   }
 
   getPositions(): Position[] {
@@ -24,7 +34,7 @@ export class SinglePill implements Controllable {
   canMove(board: Board, dx: number, dy: number): boolean {
     const newX = this.position.x + dx;
     const newY = this.position.y + dy;
-    
+
     return board.isValidPosition(newX, newY) && board.isEmpty(newX, newY);
   }
 
@@ -48,7 +58,7 @@ export class SinglePill implements Controllable {
       color: this.color,
       pillId: this.id,
     });
-    
+
     this.isActive = false;
   }
 }

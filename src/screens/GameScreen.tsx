@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, Dimensions, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, Platform, useWindowDimensions } from 'react-native';
 
-const { width: screenWidth } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
-import LinearGradient from 'react-native-linear-gradient';
+import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -15,32 +14,43 @@ import Animated, {
 import { GameEngine } from '../game/GameEngine';
 import { GameBoard } from '../components/GameBoard';
 import { GameControls } from '../components/GameControls';
-import { GameState } from '../game/utils/constants';
-import { GameStats, SpeedSetting } from '../game/utils/types';
+import { GameState, COLOR_VALUES } from '../game/utils/constants';
+import { GameStats, SpeedSetting, GameMode, GameFeedbackEvent } from '../game/utils/types';
 import { GameOverScreen } from './GameOverScreen';
 import { theme, responsiveFontSize, responsiveSpacing } from '../utils/theme';
 
 interface GameScreenProps {
   level: number;
   speedSetting: SpeedSetting;
+  gameMode: GameMode;
   onBackToMenu: () => void;
   onGameComplete: (level: number, totalScore: number) => void;
   savedTotalScore: number;
+  reducedMotion: boolean;
 }
 
 const AnimatedTouchableOpacity = Animated.createAnimatedComponent(TouchableOpacity);
 
-export const GameScreen: React.FC<GameScreenProps> = ({ 
-  level, 
-  speedSetting, 
-  onBackToMenu, 
+export const GameScreen: React.FC<GameScreenProps> = ({
+  level,
+  speedSetting,
+  gameMode,
+  onBackToMenu,
   onGameComplete,
-  savedTotalScore 
+  savedTotalScore,
+  reducedMotion,
 }) => {
-  const gameEngineRef = useRef<GameEngine>(new GameEngine());
+  const gameEngineRef = useRef<GameEngine | undefined>(undefined);
+
+  // Initialize GameEngine only once
+  if (!gameEngineRef.current) {
+    gameEngineRef.current = new GameEngine();
+  }
   const animationRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
-  
+  const { width: windowWidth } = useWindowDimensions();
+  const showSidePanels = isWeb && windowWidth > 1200;
+
   const [gameState, setGameState] = useState<GameState>(GameState.PLAYING);
   const gameStateRef = useRef<GameState>(gameState);
   const [stats, setStats] = useState<GameStats>({
@@ -52,14 +62,16 @@ export const GameScreen: React.FC<GameScreenProps> = ({
     currentSpeedLevel: 0,
     speedSetting: speedSetting,
   });
-  const [boardUpdate, setBoardUpdate] = useState(0);
+  const [feedback, setFeedback] = useState<{ title: string; detail: string } | null>(null);
 
   const headerOpacity = useSharedValue(0);
   const scoreScale = useSharedValue(1);
   const pauseButtonScale = useSharedValue(1);
+  const boardPulse = useSharedValue(1);
+  const feedbackProgress = useSharedValue(0);
 
   useEffect(() => {
-    headerOpacity.value = withTiming(1, { duration: 500 });
+    headerOpacity.value = withTiming(1, { duration: reducedMotion ? 1 : 500 });
   }, []);
 
   // Keep gameStateRef in sync with gameState
@@ -68,11 +80,12 @@ export const GameScreen: React.FC<GameScreenProps> = ({
   }, [gameState]);
 
   useEffect(() => {
+    if (reducedMotion) return;
     scoreScale.value = withSequence(
       withSpring(1.2, { damping: 10, stiffness: 400 }),
       withSpring(1, { damping: 10, stiffness: 400 })
     );
-  }, [stats.score]);
+  }, [stats.score, reducedMotion]);
 
   useEffect(() => {
     pauseButtonScale.value = withSequence(
@@ -81,18 +94,42 @@ export const GameScreen: React.FC<GameScreenProps> = ({
     );
   }, [gameState]);
 
+  const handleFeedback = (event: GameFeedbackEvent) => {
+    if (!reducedMotion) {
+      boardPulse.value = withSequence(
+        withSpring(event.type === 'match' ? 1.025 : 0.992, { damping: 16, stiffness: 320 }),
+        withSpring(1, { damping: 16, stiffness: 260 })
+      );
+    }
+    if (event.type === 'match') {
+      setFeedback({
+        title: event.combo > 1 ? `Chain x${event.combo}` : 'Clean match',
+        detail: `+${event.cleared * 100 * event.combo}`,
+      });
+      feedbackProgress.value = 0;
+      feedbackProgress.value = withSequence(
+        withTiming(1, { duration: reducedMotion ? 1 : 180 }),
+        withTiming(1, { duration: reducedMotion ? 350 : 520 }),
+        withTiming(0, { duration: reducedMotion ? 1 : 260 })
+      );
+    } else if (event.type === 'wave') {
+      setFeedback({ title: 'Fresh wave', detail: `Tray ${event.level}` });
+      feedbackProgress.value = withSequence(withTiming(1, { duration: reducedMotion ? 1 : 180 }), withTiming(0, { duration: reducedMotion ? 500 : 900 }));
+    }
+  };
+
   useEffect(() => {
-    console.log('GameScreen useEffect running - initializing game engine');
-    const engine = gameEngineRef.current;
-    
+    const engine = gameEngineRef.current!;
+
+    // The board renderer registers its own onBoardChange; this screen only
+    // needs the low-frequency state/stats updates
     engine.setCallbacks({
       onStateChange: setGameState,
       onStatsChange: setStats,
-      onBoardChange: () => setBoardUpdate(prev => prev + 1),
+      onFeedback: handleFeedback,
     });
-    
-    console.log('Starting game with level:', level, 'speedSetting:', speedSetting);
-    engine.startGame(level, speedSetting, savedTotalScore);
+
+    engine.startGame(level, speedSetting, savedTotalScore, gameMode);
     
     // Game loop
     const gameLoop = (timestamp: number) => {
@@ -114,28 +151,25 @@ export const GameScreen: React.FC<GameScreenProps> = ({
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [level, speedSetting]);
+  }, [level, speedSetting, gameMode]);
 
   const handlePause = () => {
-    const engine = gameEngineRef.current;
-    console.log('handlePause called, current gameState:', gameState);
+    const engine = gameEngineRef.current!;
     if (gameState === GameState.PLAYING) {
-      console.log('Calling engine.pause()');
       engine.pause();
     } else if (gameState === GameState.PAUSED) {
-      console.log('Calling engine.resume()');
       engine.resume();
     }
   };
 
   const handleRestart = () => {
-    gameEngineRef.current.startGame(level, speedSetting, savedTotalScore);
+    gameEngineRef.current!.startGame(level, speedSetting, savedTotalScore, gameMode);
   };
 
   const handleNextLevel = () => {
-    const currentStats = gameEngineRef.current.getStats();
+    const currentStats = gameEngineRef.current!.getStats();
     onGameComplete(level, currentStats.score);
-    gameEngineRef.current.startGame(level + 1, speedSetting, currentStats.score);
+    gameEngineRef.current!.startGame(level + 1, speedSetting, currentStats.score);
   };
 
   const headerAnimatedStyle = useAnimatedStyle(() => ({
@@ -150,6 +184,12 @@ export const GameScreen: React.FC<GameScreenProps> = ({
     transform: [{ scale: pauseButtonScale.value }],
   }));
 
+  const boardPulseStyle = useAnimatedStyle(() => ({ transform: [{ scale: boardPulse.value }] }));
+  const feedbackStyle = useAnimatedStyle(() => ({
+    opacity: feedbackProgress.value,
+    transform: [{ translateY: interpolate(feedbackProgress.value, [0, 1], [12, 0]) }],
+  }));
+
   if (gameState === GameState.GAME_OVER || gameState === GameState.LEVEL_COMPLETE) {
     return (
       <GameOverScreen
@@ -157,83 +197,77 @@ export const GameScreen: React.FC<GameScreenProps> = ({
         score={stats.score}
         level={stats.level}
         onRestart={handleRestart}
-        onNextLevel={gameState === GameState.LEVEL_COMPLETE ? handleNextLevel : undefined}
+        onNextLevel={gameState === GameState.LEVEL_COMPLETE && gameMode === GameMode.CLASSIC ? handleNextLevel : undefined}
         onBackToMenu={onBackToMenu}
+        reducedMotion={reducedMotion}
       />
     );
   }
 
+  const nextPillColors = gameEngineRef.current!.getNextPill()?.colors ?? [];
+
   return (
-    <GameControls gameEngine={gameEngineRef.current}>
+    <GameControls gameEngine={gameEngineRef.current!}>
       <LinearGradient
         colors={[theme.colors.background, theme.colors.backgroundLight]}
         style={styles.container}
       >
         <SafeAreaView style={styles.safeArea}>
           <Animated.View style={[styles.header, headerAnimatedStyle]}>
-            <View style={styles.statsContainer}>
-              <View style={styles.statItem}>
-                <Text style={styles.statLabel}>LEVEL</Text>
-                <Text style={styles.statValue}>{stats.level}</Text>
+            <View style={styles.hudBar}>
+              <View style={styles.levelChip}>
+                <Text style={styles.hudLabel}>{gameMode === GameMode.ENDLESS ? 'Wave' : 'Level'}</Text>
+                <Text style={styles.levelValue}>{stats.level}</Text>
               </View>
               
-              <Animated.View style={[styles.statItem, scoreAnimatedStyle]}>
-                <Text style={styles.statLabel}>SCORE</Text>
-                <Text style={styles.statValue}>{stats.score}</Text>
+              <Animated.View style={[styles.scoreCapsule, scoreAnimatedStyle]}>
+                <Text style={styles.hudLabel}>Score</Text>
+                <Text style={styles.scoreValue}>{stats.score}</Text>
               </Animated.View>
               
-              <View style={styles.statItem}>
-                <Text style={styles.statLabel}>VIRUSES</Text>
-                <Text style={styles.statValue}>{stats.virusCount}</Text>
-              </View>
-              
-              <View style={styles.statItem}>
-                <Text style={styles.statLabel}>CAPSULES</Text>
-                <Text style={styles.statValue}>{stats.capsulesPlaced}</Text>
-              </View>
-              
-              <View style={styles.statItem}>
-                <Text style={styles.statLabel}>SPEED</Text>
-                <Text style={styles.statValue}>{stats.speedSetting}</Text>
-                <Text style={styles.speedLevel}>Lv.{stats.currentSpeedLevel}</Text>
-              </View>
-            </View>
-            
-            <View style={styles.controls}>
-              <AnimatedTouchableOpacity 
-                onPress={handlePause} 
-                activeOpacity={0.8}
-                style={pauseButtonAnimatedStyle}
+              <AnimatedTouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel={gameState === GameState.PAUSED ? 'Resume game' : 'Pause game'}
+                onPress={handlePause}
+                activeOpacity={0.82}
+                style={[styles.pauseButton, pauseButtonAnimatedStyle]}
               >
-                <LinearGradient
-                  colors={gameState === GameState.PAUSED ? theme.colors.successGradient : theme.colors.secondary.blueGradient}
-                  style={styles.controlButton}
-                >
-                  <Text style={styles.controlButtonText}>
-                    {gameState === GameState.PAUSED ? 'RESUME' : 'PAUSE'}
-                  </Text>
-                </LinearGradient>
+                <Text style={styles.pauseButtonText}>{gameState === GameState.PAUSED ? '>' : '||'}</Text>
               </AnimatedTouchableOpacity>
-              
-              <TouchableOpacity onPress={onBackToMenu} activeOpacity={0.8}>
-                <LinearGradient
-                  colors={['#666', '#444']}
-                  style={styles.controlButton}
-                >
-                  <Text style={styles.controlButtonText}>MENU</Text>
-                </LinearGradient>
-              </TouchableOpacity>
+            </View>
+
+            <View style={styles.contextBar}>
+              <View style={styles.virusCounter}>
+                <View style={styles.microbeDot} />
+                <Text style={styles.contextText}>{stats.virusCount} microbes</Text>
+              </View>
+
+              <View style={styles.nextWell}>
+                <Text style={styles.nextLabel}>Up next</Text>
+                <View style={styles.nextCapsule}>
+                  {nextPillColors.map((color, index) => (
+                    <View
+                      key={index}
+                      style={[
+                        styles.nextCapsuleHalf,
+                        { backgroundColor: COLOR_VALUES[color] },
+                        index === 0 ? styles.nextCapsuleLeft : styles.nextCapsuleRight,
+                      ]}
+                    />
+                  ))}
+                </View>
+              </View>
             </View>
           </Animated.View>
           
-          <View style={styles.gameArea}>
+          <View style={[styles.gameArea, showSidePanels && styles.gameAreaWide]}>
             {/* Left side panel for desktop */}
-            {isWeb && screenWidth > 1200 && (
+            {showSidePanels && (
               <View style={styles.leftPanel}>
                 <View style={styles.sideStats}>
                   <Text style={styles.sidePanelTitle}>Game Stats</Text>
                   <View style={styles.sideStatItem}>
-                    <Text style={styles.sideStatLabel}>Level</Text>
+                    <Text style={styles.sideStatLabel}>{gameMode === GameMode.ENDLESS ? 'Wave' : 'Level'}</Text>
                     <Text style={styles.sideStatValue}>{stats.level}</Text>
                   </View>
                   <View style={styles.sideStatItem}>
@@ -249,51 +283,59 @@ export const GameScreen: React.FC<GameScreenProps> = ({
                     <Text style={styles.sideStatValue}>{stats.capsulesPlaced}</Text>
                   </View>
                   <View style={styles.sideStatItem}>
-                    <Text style={styles.sideStatLabel}>Speed Level</Text>
-                    <Text style={styles.sideStatValue}>{stats.currentSpeedLevel}/49</Text>
+                    <Text style={styles.sideStatLabel}>Mode</Text>
+                    <Text style={styles.sideStatValue}>{gameMode === GameMode.ENDLESS ? 'Endless' : 'Classic'}</Text>
                   </View>
                 </View>
               </View>
             )}
 
             {/* Main game board */}
-            <View style={styles.boardContainer}>
-              <GameBoard
-                board={gameEngineRef.current.getBoard()}
-                fallingPills={gameEngineRef.current.getAllFallingPills()}
-                gameEngine={gameEngineRef.current}
-              />
-              
+            <Animated.View style={[styles.boardContainer, boardPulseStyle]}>
+              <GameBoard gameEngine={gameEngineRef.current!} reducedMotion={reducedMotion} />
+
+              {feedback && gameState === GameState.PLAYING && (
+                <Animated.View pointerEvents="none" style={[styles.feedbackToast, feedbackStyle]} accessibilityLiveRegion="polite">
+                  <Text style={styles.feedbackTitle}>{feedback.title}</Text>
+                  <Text style={styles.feedbackDetail}>{feedback.detail}</Text>
+                </Animated.View>
+              )}
+
               {gameState === GameState.PAUSED && (
                 <Animated.View style={styles.pauseOverlay}>
                   <LinearGradient
-                    colors={['rgba(0,0,0,0.8)', 'rgba(0,0,0,0.9)']}
+                    colors={[theme.colors.pauseFrost, 'rgba(20,28,46,0.88)']}
                     style={styles.pauseGradient}
                   >
-                    <Text style={styles.pauseText}>PAUSED</Text>
-                    <Text style={styles.pauseSubtext}>Tap resume to continue</Text>
+                    <Text style={styles.pauseText}>Paused</Text>
+                    <Text style={styles.pauseSubtext}>Your lab run is waiting.</Text>
+                    <View style={styles.pauseActions}>
+                      <TouchableOpacity accessibilityRole="button" accessibilityLabel="Resume game" onPress={handlePause} activeOpacity={0.84} style={styles.pausePrimary}>
+                        <Text style={styles.pausePrimaryText}>Resume</Text>
+                      </TouchableOpacity>
+                      <View style={styles.pauseSecondaryRow}>
+                        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Restart game" onPress={handleRestart} activeOpacity={0.84} style={styles.pauseSecondary}>
+                          <Text style={styles.pauseSecondaryText}>Restart</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Return to menu" onPress={onBackToMenu} activeOpacity={0.84} style={styles.pauseSecondary}>
+                          <Text style={styles.pauseSecondaryText}>Menu</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
                   </LinearGradient>
                 </Animated.View>
               )}
-            </View>
+            </Animated.View>
 
-            {/* Right side panel or floating next pill container */}
-            <View style={styles.nextPillContainer}>
-              <Text style={styles.nextPillLabel}>NEXT</Text>
-              <View style={styles.nextPillPreview}>
-                {/* Next pill preview will be implemented later */}
+            {/* Additional desktop controls - only show on web */}
+            {showSidePanels && (
+              <View style={styles.desktopControls}>
+                <Text style={styles.controlsTitle}>Controls</Text>
+                <Text style={styles.controlText}>Left / Right Move</Text>
+                <Text style={styles.controlText}>Down Fast Drop</Text>
+                <Text style={styles.controlText}>Space Rotate</Text>
               </View>
-              
-              {/* Additional desktop controls */}
-              {isWeb && screenWidth > 1200 && (
-                <View style={styles.desktopControls}>
-                  <Text style={styles.controlsTitle}>Controls</Text>
-                  <Text style={styles.controlText}>← → Move</Text>
-                  <Text style={styles.controlText}>↓ Fast Drop</Text>
-                  <Text style={styles.controlText}>Space Rotate</Text>
-                </View>
-              )}
-            </View>
+            )}
           </View>
         </SafeAreaView>
       </LinearGradient>
@@ -310,36 +352,135 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: responsiveSpacing(20),
-    paddingTop: isWeb ? responsiveSpacing(5) : responsiveSpacing(10), // Less top padding on web
-    paddingBottom: isWeb ? responsiveSpacing(10) : responsiveSpacing(20), // Less bottom padding on web
+    paddingTop: isWeb ? responsiveSpacing(8) : responsiveSpacing(10),
+    paddingBottom: responsiveSpacing(10),
   },
-  statsContainer: {
+  hudBar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: isWeb ? responsiveSpacing(8) : responsiveSpacing(16), // Less margin on web
-    flexWrap: 'wrap',
-    gap: responsiveSpacing(8),
-  },
-  statItem: {
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    paddingHorizontal: isWeb ? responsiveSpacing(8) : responsiveSpacing(16), // Smaller padding for more items
-    paddingVertical: isWeb ? responsiveSpacing(6) : responsiveSpacing(10),
-    borderRadius: theme.borderRadius.md,
-    minWidth: isWeb ? responsiveSpacing(65) : responsiveSpacing(80), // Smaller min width for more items
-    flex: isWeb ? 0 : 1, // Allow flex on mobile, fixed on web
+    justifyContent: 'space-between',
+    gap: responsiveSpacing(10),
   },
-  statLabel: {
-    fontSize: responsiveFontSize(12),
+  levelChip: {
+    minWidth: responsiveSpacing(82),
+    minHeight: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceGlass,
+    borderRadius: theme.borderRadius.round,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    paddingHorizontal: responsiveSpacing(14),
+  },
+  scoreCapsule: {
+    flex: 1,
+    minHeight: 58,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: theme.borderRadius.round,
+    backgroundColor: 'rgba(88,214,183,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(88,214,183,0.34)',
+    paddingHorizontal: responsiveSpacing(18),
+    ...theme.shadows.sm,
+  },
+  hudLabel: {
+    fontSize: responsiveFontSize(11),
     color: theme.colors.text.secondary,
-    fontWeight: '600',
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  statValue: {
-    fontSize: responsiveFontSize(24),
-    color: theme.colors.text.primary,
     fontWeight: '800',
+    marginBottom: 2,
+  },
+  levelValue: {
+    fontSize: responsiveFontSize(22),
+    color: theme.colors.text.primary,
+    fontWeight: '900',
+  },
+  scoreValue: {
+    fontSize: responsiveFontSize(25),
+    color: theme.colors.text.primary,
+    fontWeight: '900',
+  },
+  pauseButton: {
+    width: 52,
+    height: 52,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceGlass,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  pauseButtonText: {
+    color: theme.colors.text.primary,
+    fontSize: responsiveFontSize(18),
+    fontWeight: '900',
+    lineHeight: responsiveFontSize(20),
+  },
+  contextBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: responsiveSpacing(10),
+    gap: responsiveSpacing(10),
+  },
+  virusCounter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: responsiveSpacing(8),
+    paddingHorizontal: responsiveSpacing(12),
+    paddingVertical: responsiveSpacing(8),
+    borderRadius: theme.borderRadius.round,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+  },
+  microbeDot: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: theme.colors.tertiary.yellow,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.24)',
+  },
+  contextText: {
+    color: theme.colors.text.secondary,
+    fontSize: responsiveFontSize(13),
+    fontWeight: '800',
+  },
+  nextWell: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: responsiveSpacing(9),
+    paddingHorizontal: responsiveSpacing(12),
+    paddingVertical: responsiveSpacing(8),
+    borderRadius: theme.borderRadius.round,
+    backgroundColor: theme.colors.surfaceGlass,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  nextLabel: {
+    color: theme.colors.text.secondary,
+    fontSize: responsiveFontSize(12),
+    fontWeight: '800',
+  },
+  nextCapsule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  nextCapsuleHalf: {
+    width: responsiveSpacing(20),
+    height: responsiveSpacing(22),
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.45)',
+  },
+  nextCapsuleLeft: {
+    borderTopLeftRadius: 11,
+    borderBottomLeftRadius: 11,
+  },
+  nextCapsuleRight: {
+    borderTopRightRadius: 11,
+    borderBottomRightRadius: 11,
   },
   controls: {
     flexDirection: 'row',
@@ -363,17 +504,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     // Add scroll fallback for constrained spaces
-    ...(isWeb ? {
+    ...(isWeb ? ({
       overflow: 'auto', // Allow scrolling if content doesn't fit
       maxHeight: '100%', // Don't exceed parent height
-    } : {}),
-    // On desktop, create a horizontal layout if screen is wide enough
-    ...(isWeb && screenWidth > 1200 ? {
-      flexDirection: 'row',
-      justifyContent: 'space-around',
-      alignItems: 'flex-start',
-      paddingHorizontal: responsiveSpacing(20), // Reduced padding
-    } : {}),
+    } as any) : {}),
+  },
+  // Horizontal layout with side panels on wide desktop windows
+  gameAreaWide: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'flex-start',
+    paddingHorizontal: responsiveSpacing(20),
   },
   pauseOverlay: {
     position: 'absolute',
@@ -383,62 +524,64 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: 'rgba(8,12,22,0.28)',
   },
   pauseGradient: {
-    paddingHorizontal: responsiveSpacing(60),
-    paddingVertical: responsiveSpacing(40),
+    width: '82%',
+    maxWidth: 320,
+    paddingHorizontal: responsiveSpacing(24),
+    paddingVertical: responsiveSpacing(24),
     borderRadius: theme.borderRadius.xl,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
   },
   pauseText: {
-    fontSize: responsiveFontSize(48),
+    fontSize: responsiveFontSize(34),
     fontWeight: '900',
     color: theme.colors.text.primary,
-    letterSpacing: 4,
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 4 },
-    textShadowRadius: 8,
   },
   pauseSubtext: {
-    fontSize: responsiveFontSize(16),
-    color: theme.colors.text.secondary,
-    marginTop: responsiveSpacing(12),
-  },
-  nextPillContainer: {
-    // On wide desktop screens, position relative instead of absolute for better layout
-    ...(isWeb && screenWidth > 1200 ? {
-      alignItems: 'center',
-      backgroundColor: 'rgba(255,255,255,0.1)',
-      padding: responsiveSpacing(20),
-      borderRadius: theme.borderRadius.md,
-      ...theme.shadows.sm,
-      marginLeft: responsiveSpacing(20),
-      minWidth: responsiveSpacing(120),
-    } : {
-      position: 'absolute',
-      top: responsiveSpacing(100),
-      right: responsiveSpacing(20),
-      alignItems: 'center',
-      backgroundColor: 'rgba(255,255,255,0.1)',
-      padding: responsiveSpacing(16),
-      borderRadius: theme.borderRadius.md,
-      ...theme.shadows.sm,
-    }),
-  },
-  nextPillLabel: {
     fontSize: responsiveFontSize(14),
+    color: theme.colors.text.secondary,
     fontWeight: '700',
-    color: theme.colors.text.primary,
-    letterSpacing: 1,
-    marginBottom: responsiveSpacing(8),
+    marginTop: responsiveSpacing(6),
+    marginBottom: responsiveSpacing(18),
   },
-  nextPillPreview: {
-    width: responsiveSpacing(60),
-    height: responsiveSpacing(30),
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: theme.borderRadius.sm,
+  pauseActions: {
+    width: '100%',
+    gap: responsiveSpacing(10),
+  },
+  pausePrimary: {
+    minHeight: 50,
+    borderRadius: theme.borderRadius.round,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.primary.red,
+  },
+  pausePrimaryText: {
+    color: theme.colors.text.primary,
+    fontSize: responsiveFontSize(16),
+    fontWeight: '900',
+  },
+  pauseSecondaryRow: {
+    flexDirection: 'row',
+    gap: responsiveSpacing(10),
+  },
+  pauseSecondary: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: theme.borderRadius.round,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceGlass,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  pauseSecondaryText: {
+    color: theme.colors.text.primary,
+    fontSize: responsiveFontSize(14),
+    fontWeight: '900',
   },
   leftPanel: {
     width: responsiveSpacing(200),
@@ -475,10 +618,36 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     // Ensure board container doesn't exceed available space
-    ...(isWeb ? {
+    ...(isWeb ? ({
       maxHeight: '80vh', // Maximum 80% of viewport height
       overflow: 'visible', // Let board be visible even if it overflows slightly
-    } : {}),
+    } as any) : {}),
+  },
+  feedbackToast: {
+    position: 'absolute',
+    top: '42%',
+    alignSelf: 'center',
+    minWidth: 150,
+    paddingHorizontal: responsiveSpacing(18),
+    paddingVertical: responsiveSpacing(11),
+    borderRadius: theme.borderRadius.round,
+    backgroundColor: 'rgba(10,17,31,0.9)',
+    borderWidth: 1,
+    borderColor: 'rgba(88,214,183,0.48)',
+    alignItems: 'center',
+    zIndex: 20,
+    ...theme.shadows.md,
+  },
+  feedbackTitle: {
+    color: theme.colors.mint,
+    fontSize: responsiveFontSize(16),
+    fontWeight: '900',
+  },
+  feedbackDetail: {
+    color: theme.colors.text.primary,
+    fontSize: responsiveFontSize(13),
+    fontWeight: '900',
+    marginTop: 2,
   },
   desktopControls: {
     marginTop: responsiveSpacing(20),

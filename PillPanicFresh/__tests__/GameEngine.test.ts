@@ -51,14 +51,14 @@ describe('Germ Buster engine', () => {
     const startX = pill.position.x;
     const startY = pill.position.y;
 
-    engine.dragHeldPill(pill.id, 2.4, 0);
+    engine.dragHeldPill(2.4, 0);
     expect(pill.position.x).toBe(startX + 2);
 
-    engine.dragHeldPill(pill.id, 2.4, 3.4);
+    engine.dragHeldPill(2.4, 3.4);
     expect(pill.position.y).toBeGreaterThanOrEqual(startY + 2);
 
     const yAfterDown = pill.position.y;
-    engine.dragHeldPill(pill.id, 2.4, -5); // try to drag back up
+    engine.dragHeldPill(2.4, -5); // try to drag back up
     expect(pill.position.y).toBe(yAfterDown);
   });
 
@@ -68,44 +68,9 @@ describe('Germ Buster engine', () => {
     engine.grabPill(pill.id);
     tick(engine, 1000);
     const y = pill.position.y;
-    engine.releaseHeldPill(pill.id);
+    engine.releaseHeldPill();
     tick(engine, 1700);
     expect(pill.position.y).toBeGreaterThan(y);
-  });
-
-  it('a downward flick on release sends the piece into fast drop', () => {
-    const engine = freshEngine();
-    const pill = engine.getAllFallingPills()[0];
-    engine.grabPill(pill.id);
-    engine.releaseHeldPill(pill.id, true);
-    expect(pill.fastDrop).toBe(true);
-    const y = pill.position.y;
-    tick(engine, 300); // fast drop = 50ms per row
-    expect(pill.isActive === false || pill.position.y > y + 3).toBe(true);
-  });
-
-  it('holding two pieces at once never strands one in the held state', () => {
-    const engine = freshEngine();
-    const pillA = engine.getAllFallingPills()[0];
-    engine.grabPill(pillA.id);
-
-    const board = engine.getBoard();
-    board.setCell(6, 5, { type: CellType.PILL, color: Color.YELLOW, pillId: 'float-x' });
-    (engine as any).releaseFloatingPieces();
-    const pillB = engine.getAllFallingPills().find(p => p.id.startsWith('single-'))!;
-
-    engine.grabPill(pillB.id);
-    expect(pillA.held && pillB.held).toBe(true);
-
-    engine.releaseHeldPill(pillB.id);
-    expect(pillB.held).toBe(false);
-    expect(pillA.held).toBe(true);
-
-    // The still-held piece keeps responding to its own finger
-    engine.dragHeldPill(pillA.id, -10, 0);
-    expect(pillA.position.x).toBe(0);
-    engine.releaseHeldPill(pillA.id);
-    expect(pillA.held).toBe(false);
   });
 
   it('tapping rotates the capsule', () => {

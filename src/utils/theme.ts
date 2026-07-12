@@ -10,52 +10,63 @@ const isLargeScreen = screenWidth >= 1024;
 
 export const theme = {
   colors: {
-    // Primary colors with gradients
+    // Premium capsule-lab palette
     primary: {
-      red: '#FF5E5B',
-      redDark: '#E63946',
-      redGradient: ['#FF5E5B', '#E63946'],
+      red: '#F76F6A',
+      redDark: '#D94F4B',
+      redGradient: ['#FF8A7E', '#F76F6A', '#D94F4B'] as const,
     },
     secondary: {
-      blue: '#5DADE2',
-      blueDark: '#2E86AB',
-      blueGradient: ['#5DADE2', '#2E86AB'],
+      blue: '#67B8F7',
+      blueDark: '#397DBE',
+      blueGradient: ['#8FD0FF', '#67B8F7', '#397DBE'] as const,
     },
     tertiary: {
-      yellow: '#FFE66D',
-      yellowDark: '#FFC93C',
-      yellowGradient: ['#FFE66D', '#FFC93C'],
+      yellow: '#FFD85A',
+      yellowDark: '#F8B84E',
+      yellowGradient: ['#FFE98A', '#FFD85A', '#F8B84E'] as const,
     },
+    mint: '#58D6B7',
+    mintDark: '#21A889',
+    lavender: '#9B8CFF',
     // UI colors
-    background: '#1A1A2E',
-    backgroundLight: '#16213E',
-    surface: '#0F3460',
-    surfaceLight: '#E94560',
+    background: '#101729',
+    backgroundLight: '#18233A',
+    labMist: '#EAF7F3',
+    boardWell: '#182033',
+    surface: '#222C45',
+    surfaceLight: '#F7FBF8',
+    surfaceGlass: 'rgba(255,255,255,0.12)',
+    surfaceGlassStrong: 'rgba(255,255,255,0.18)',
     text: {
       primary: '#FFFFFF',
-      secondary: '#B8B8D4',
-      disabled: '#6B6B83',
+      secondary: '#B9C5D9',
+      disabled: 'rgba(255,255,255,0.36)',
+      dark: '#24304A',
+      muted: '#69748A',
     },
-    success: '#4ECDC4',
-    successGradient: ['#4ECDC4', '#2C9B91'],
-    error: '#FF6B6B',
-    errorGradient: ['#FF6B6B', '#C44569'],
-    warning: '#FFE66D',
+    success: '#42C99A',
+    successGradient: ['#6CE3BE', '#42C99A', '#21A889'] as const,
+    error: '#E95B5B',
+    errorGradient: ['#FF8A7E', '#E95B5B', '#B74646'] as const,
+    warning: '#F8B84E',
     // Game specific
     virus: {
-      red: ['#FF6B6B', '#C44569'],
-      blue: ['#4ECDC4', '#2E86AB'],
-      yellow: ['#FFE66D', '#F8B500'],
+      red: ['#FF8A7E', '#E95B5B', '#B74646'] as const,
+      blue: ['#8FD0FF', '#67B8F7', '#397DBE'] as const,
+      yellow: ['#FFE98A', '#FFD85A', '#F8B84E'] as const,
     },
     pill: {
-      red: ['#FF5E5B', '#E63946'],
-      blue: ['#5DADE2', '#2E86AB'],
-      yellow: ['#FFE66D', '#FFC93C'],
+      red: ['#FFD3CE', '#F76F6A', '#D94F4B'] as const,
+      blue: ['#D5F0FF', '#67B8F7', '#397DBE'] as const,
+      yellow: ['#FFF4B8', '#FFD85A', '#F8B84E'] as const,
     },
-    boardBackground: 'rgba(26, 26, 46, 0.95)',
-    boardBorder: '#4ECDC4',
-    cellEmpty: 'rgba(255, 255, 255, 0.05)',
-    cellBorder: 'rgba(255, 255, 255, 0.1)',
+    boardBackground: '#F7FBF8',
+    boardBorder: 'rgba(88, 214, 183, 0.38)',
+    cellEmpty: 'rgba(255, 255, 255, 0.055)',
+    cellBorder: 'rgba(255, 255, 255, 0.08)',
+    modalScrim: 'rgba(8,12,22,0.62)',
+    pauseFrost: 'rgba(20,28,46,0.72)',
   },
   spacing: {
     xs: 4,
@@ -105,10 +116,10 @@ export const theme = {
       elevation: 12,
     },
     glow: {
-      shadowColor: '#4ECDC4',
+      shadowColor: '#58D6B7',
       shadowOffset: { width: 0, height: 0 },
-      shadowOpacity: 0.6,
-      shadowRadius: 20,
+      shadowOpacity: 0.42,
+      shadowRadius: 18,
       elevation: 10,
     },
   },
@@ -131,52 +142,52 @@ export const theme = {
         const isVeryLargeScreen = screenWidth >= 1440;
         const isLargeScreen = screenWidth >= 1200 && screenWidth < 1440;
         const isMediumScreen = screenWidth >= 900 && screenWidth < 1200;
-        
-        console.log('OPTIMIZED Desktop sizing:', { 
-          screenWidth,
-          screenHeight, 
-          availableScreenHeight,
-          browserChrome,
-          availableHeight,
-          screenCategory: isVeryLargeScreen ? 'very-large' : isLargeScreen ? 'large' : isMediumScreen ? 'medium' : 'small'
-        });
-        
+
         // Calculate for 16 rows with optimized spacing
-        const boardPadding = 12; // Reduced padding
-        const cellMargin = 1.5; // Optimized margin
+        const boardPadding = 12;
+        const cellMargin = 1.5;
         const totalSpacing = (boardPadding * 2) + (16 * cellMargin * 2);
-        
-        const spaceForCells = Math.max(availableHeight - totalSpacing, 400); // Increased minimum to 400px
+
+        const spaceForCells = Math.max(availableHeight - totalSpacing, 400);
         const calculatedCellSize = Math.floor(spaceForCells / 16);
-        
-        console.log('OPTIMIZED Cell calculation:', { 
-          spaceForCells, 
-          calculatedCellSize,
-          totalSpacing
-        });
-        
-        // BIGGER ranges while maintaining safety
+
         if (isVeryLargeScreen) {
-          const finalSize = Math.max(Math.min(calculatedCellSize, 50), 35); // 35-50px range
-          console.log('Very Large Screen - Final cell size:', finalSize);
-          return finalSize;
+          return Math.max(Math.min(calculatedCellSize, 50), 35);
         } else if (isLargeScreen) {
-          const finalSize = Math.max(Math.min(calculatedCellSize, 45), 30); // 30-45px range
-          console.log('Large Screen - Final cell size:', finalSize);
-          return finalSize;
+          return Math.max(Math.min(calculatedCellSize, 45), 30);
         } else if (isMediumScreen) {
-          const finalSize = Math.max(Math.min(calculatedCellSize, 40), 25); // 25-40px range
-          console.log('Medium Screen - Final cell size:', finalSize);
-          return finalSize;
+          return Math.max(Math.min(calculatedCellSize, 40), 25);
         } else {
-          const finalSize = Math.max(Math.min(calculatedCellSize, 35), 22); // 22-35px range
-          console.log('Small Screen - Final cell size:', finalSize);
-          return finalSize;
+          return Math.max(Math.min(calculatedCellSize, 35), 22);
         }
       }
       
-      // Mobile: use width-based calculation
-      return Math.min(screenWidth * 0.9 / 8, 45);
+      // Mobile: Calculate based on available screen height for better iPhone fit
+      // Account for safe areas, header, and UI elements
+      const safeAreaTop = 50; // Status bar + notch
+      const safeAreaBottom = 40; // Home indicator
+      const headerHeight = 80; // Reduced - removed control buttons and next pill container
+      const padding = 20; // Reduced general padding
+      
+      // Available height for the game board (16 rows)
+      const availableHeight = screenHeight - safeAreaTop - safeAreaBottom - headerHeight - padding;
+      
+      // Calculate cell size to fit 16 rows with some spacing
+      const cellSpacing = 2; // Small spacing between cells
+      const totalSpacing = 16 * cellSpacing;
+      const spaceForCells = availableHeight - totalSpacing;
+      const heightBasedCellSize = Math.floor(spaceForCells / 16);
+      
+      // Also consider width-based size (8 columns with padding)
+      const widthPadding = 60; // Side padding
+      const spaceForWidth = screenWidth - widthPadding;
+      const widthBasedCellSize = Math.floor(spaceForWidth / 8);
+      
+      // Use the smaller of the two to ensure it fits in both directions
+      const calculatedSize = Math.min(heightBasedCellSize, widthBasedCellSize);
+      
+      // Clamp between reasonable bounds for mobile
+      return Math.max(Math.min(calculatedSize, 35), 18);
     })(),
     maxContentWidth: 1400, // Increased for better desktop layout
     boardWidth: 8,
