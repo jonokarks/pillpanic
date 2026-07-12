@@ -1,8 +1,5 @@
-import { Audio } from 'expo-av';
-
 export class SoundManager {
   private static instance: SoundManager;
-  private sounds: { [key: string]: Audio.Sound } = {};
   private enabled: boolean = true;
 
   private constructor() {}
@@ -15,15 +12,8 @@ export class SoundManager {
   }
 
   async initialize() {
-    try {
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-      });
-    } catch (error) {
-      console.warn('Failed to initialize audio:', error);
-    }
+    // Simplified - no audio setup needed for now
+    console.log('SoundManager initialized (simplified)');
   }
 
   async playSound(soundName: string) {

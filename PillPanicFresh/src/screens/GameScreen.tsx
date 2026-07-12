@@ -57,7 +57,6 @@ export const GameScreen: React.FC<GameScreenProps> = ({
     currentSpeedLevel: 0,
     speedSetting: speedSetting,
   });
-  const [boardUpdate, setBoardUpdate] = useState(0);
 
   const headerOpacity = useSharedValue(0);
   const scoreScale = useSharedValue(1);
@@ -87,16 +86,15 @@ export const GameScreen: React.FC<GameScreenProps> = ({
   }, [gameState]);
 
   useEffect(() => {
-    console.log('GameScreen useEffect running - initializing game engine');
     const engine = gameEngineRef.current;
-    
+
+    // The GameBoard registers its own onBoardChange for the 60fps piece
+    // updates; the screen only re-renders on state/stats changes
     engine.setCallbacks({
       onStateChange: setGameState,
       onStatsChange: setStats,
-      onBoardChange: () => setBoardUpdate(prev => prev + 1),
     });
-    
-    console.log('Starting game with level:', level, 'speedSetting:', speedSetting);
+
     engine.startGame(level, speedSetting, savedTotalScore);
     
     // Game loop
@@ -123,12 +121,9 @@ export const GameScreen: React.FC<GameScreenProps> = ({
 
   const handlePause = () => {
     const engine = gameEngineRef.current;
-    console.log('handlePause called, current gameState:', gameState);
     if (gameState === GameState.PLAYING) {
-      console.log('Calling engine.pause()');
       engine.pause();
     } else if (gameState === GameState.PAUSED) {
-      console.log('Calling engine.resume()');
       engine.resume();
     }
   };
@@ -242,12 +237,8 @@ export const GameScreen: React.FC<GameScreenProps> = ({
 
             {/* Main game board */}
             <View style={styles.boardContainer}>
-              <GameBoard
-                board={gameEngineRef.current.getBoard()}
-                fallingPills={gameEngineRef.current.getAllFallingPills()}
-                gameEngine={gameEngineRef.current}
-              />
-              
+              <GameBoard gameEngine={gameEngineRef.current} />
+
               {gameState === GameState.PAUSED && (
                 <Animated.View style={styles.pauseOverlay}>
                   <LinearGradient
@@ -466,12 +457,14 @@ const styles = StyleSheet.create({
     color: theme.colors.text.primary,
   },
   boardContainer: {
+    // Fill the remaining space so the board can measure it and size its
+    // cells to fit the device
+    flex: 1,
+    alignSelf: 'stretch',
     alignItems: 'center',
     justifyContent: 'center',
-    // Ensure board container doesn't exceed available space
     ...(isWeb ? {
-      maxHeight: '80vh', // Maximum 80% of viewport height
-      overflow: 'visible', // Let board be visible even if it overflows slightly
+      maxHeight: '80vh' as any, // Don't exceed the viewport on web
     } : {}),
   },
   desktopControls: {

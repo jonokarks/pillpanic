@@ -1,11 +1,10 @@
-import React, { useEffect } from 'react';
-import { View, StyleSheet, Platform } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { View, StyleSheet, Platform, LayoutChangeEvent } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
-  runOnJS,
 } from 'react-native-reanimated';
 import { PanGestureHandler, TapGestureHandler, State } from 'react-native-gesture-handler';
 import { Board } from '../game/entities/Board';
@@ -14,7 +13,6 @@ import { GameEngine } from '../game/GameEngine';
 import {
   BOARD_WIDTH,
   BOARD_HEIGHT,
-  CELL_SIZE,
   COLOR_GRADIENTS,
   VIRUS_GRADIENTS,
   CellType,
@@ -24,21 +22,70 @@ import { theme } from '../utils/theme';
 
 const isWeb = Platform.OS === 'web';
 
-// Layout metrics shared by the static grid and the floating piece overlay
+// Fixed chrome around the 8x16 grid. The cell size itself is derived from
+// the space measured at runtime, so the board fits any screen, notch, or
+// orientation without hard-coded device assumptions.
 const CELL_MARGIN = isWeb ? 1.5 : 1;
-const CELL_PITCH = CELL_SIZE + CELL_MARGIN * 2;
 const BOARD_PADDING = isWeb ? 6 : 4;
+const FRAME_PADDING = isWeb ? 12 : 8;
+const FRAME_BORDER = isWeb ? 3 : 2;
+const CHROME = (BOARD_PADDING + FRAME_PADDING + FRAME_BORDER) * 2;
+
+// Releasing a piece with a downward flick faster than this sends it into
+// fast drop
+const FLICK_VELOCITY = 700; // px/s
+
+// Comfortable finger target; pieces on small screens get invisible extra
+// grab area to make up the difference
+const MIN_TOUCH_TARGET = 44;
+
+interface Metrics {
+  cellSize: number;
+  cellPitch: number;
+}
+
+const computeMetrics = (width: number, height: number): Metrics | null => {
+  if (width <= 0 || height <= 0) return null;
+  const pitchX = (width - CHROME) / BOARD_WIDTH;
+  const pitchY = (height - CHROME) / BOARD_HEIGHT;
+  const cellSize = Math.max(
+    14,
+    Math.min(48, Math.floor(Math.min(pitchX, pitchY)) - CELL_MARGIN * 2)
+  );
+  return { cellSize, cellPitch: cellSize + CELL_MARGIN * 2 };
+};
+
+// Cell styles depend on the measured cell size, so they're built per size
+// (this only re-runs when the size actually changes, e.g. on rotation)
+const makeCellStyles = (cellSize: number) =>
+  StyleSheet.create({
+    cell: {
+      width: cellSize,
+      height: cellSize,
+      borderWidth: isWeb ? 1.5 : 1,
+      margin: CELL_MARGIN,
+      borderRadius: Math.max(4, Math.round(cellSize * 0.25)),
+      overflow: 'hidden',
+    },
+    emptyCell: {
+      backgroundColor: theme.colors.cellEmpty,
+      borderColor: theme.colors.cellBorder,
+    },
+    virusCell: {
+      borderRadius: cellSize / 2,
+    },
+  });
+
+type CellStyles = ReturnType<typeof makeCellStyles>;
 
 interface GameBoardProps {
-  board: Board;
-  fallingPills: Controllable[];
   gameEngine: GameEngine;
 }
 
 // The settled board: viruses and placed pill halves. Memoized on the board
 // version so the 60fps falling-piece updates don't re-render the grid.
-const StaticGrid = React.memo<{ board: Board; version: number }>(
-  ({ board }) => {
+const StaticGrid = React.memo<{ board: Board; version: number; cellStyles: CellStyles }>(
+  ({ board, cellStyles }) => {
     return (
       <View>
         {Array.from({ length: BOARD_HEIGHT }, (_, y) => (
@@ -46,7 +93,7 @@ const StaticGrid = React.memo<{ board: Board; version: number }>(
             {Array.from({ length: BOARD_WIDTH }, (_, x) => {
               const cell = board.getCell(x, y);
               if (!cell || cell.type === CellType.EMPTY || !cell.color) {
-                return <View key={x} style={[styles.cell, styles.emptyCell]} />;
+                return <View key={x} style={[cellStyles.cell, cellStyles.emptyCell]} />;
               }
 
               const isVirus = cell.type === CellType.VIRUS;
@@ -58,13 +105,13 @@ const StaticGrid = React.memo<{ board: Board; version: number }>(
                 <View
                   key={x}
                   style={[
-                    styles.cell,
+                    cellStyles.cell,
                     { borderColor: isVirus ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.3)' },
                   ]}
                 >
                   <LinearGradient
                     colors={gradientColors}
-                    style={[styles.cellContent, isVirus && styles.virusCell]}
+                    style={[styles.cellContent, isVirus && cellStyles.virusCell]}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
                   />
@@ -76,19 +123,22 @@ const StaticGrid = React.memo<{ board: Board; version: number }>(
       </View>
     );
   },
-  (prev, next) => prev.version === next.version
+  (prev, next) => prev.version === next.version && prev.cellStyles === next.cellStyles
 );
 
-// One falling piece (whole capsule or single half), absolutely positioned
-// over the grid. Follows the engine's smooth sub-cell position and carries
-// the Germ Buster gestures: drag to move, tap to rotate.
+// One falling piece (whole capsule or single half), positioned over the grid
+// with transforms (no layout pass per frame). Carries the Germ Buster
+// gestures: drag to move, tap to rotate, flick down to slam.
 const FallingPiece: React.FC<{
   pill: Controllable;
   board: Board;
   gameEngine: GameEngine;
   isSelected: boolean;
-}> = ({ pill, board, gameEngine, isSelected }) => {
+  metrics: Metrics;
+  cellStyles: CellStyles;
+}> = ({ pill, board, gameEngine, isSelected, metrics, cellStyles }) => {
   const scale = useSharedValue(1);
+  const { cellSize, cellPitch } = metrics;
 
   const positions = pill.getPositions();
   const originX = pill.position.x;
@@ -105,34 +155,31 @@ const FallingPiece: React.FC<{
   const maxDX = Math.max(...positions.map(p => p.x - originX));
   const maxDY = Math.max(...positions.map(p => p.y - originY));
 
-  const grab = (id: string) => gameEngine.grabPill(id);
-  const drag = (tx: number, ty: number) => gameEngine.dragHeldPill(tx, ty);
-  const release = () => gameEngine.releaseHeldPill();
-  const rotate = (id: string) => gameEngine.rotatePillById(id);
+  // Extra invisible grab area so small cells still make a full-size target
+  const grabSlop = Math.max(0, Math.round((MIN_TOUCH_TARGET - cellSize) / 2));
 
   const handlePan = (event: any) => {
-    'worklet';
-    const { state, translationX, translationY } = event.nativeEvent;
+    const { state, translationX, translationY, velocityY } = event.nativeEvent;
 
     if (state === State.BEGAN) {
       scale.value = withSpring(1.08, { damping: 15, stiffness: 300 });
-      runOnJS(grab)(pill.id);
+      gameEngine.grabPill(pill.id);
     } else if (state === State.ACTIVE) {
-      runOnJS(drag)(translationX / CELL_PITCH, translationY / CELL_PITCH);
+      gameEngine.dragHeldPill(pill.id, translationX / cellPitch, translationY / cellPitch);
     } else if (
       state === State.END ||
       state === State.CANCELLED ||
       state === State.FAILED
     ) {
       scale.value = withSpring(1, { damping: 15, stiffness: 300 });
-      runOnJS(release)();
+      const flick = state === State.END && (velocityY ?? 0) > FLICK_VELOCITY;
+      gameEngine.releaseHeldPill(pill.id, flick);
     }
   };
 
   const handleTap = (event: any) => {
-    'worklet';
     if (event.nativeEvent.state === State.END) {
-      runOnJS(rotate)(pill.id);
+      gameEngine.rotatePillById(pill.id);
     }
   };
 
@@ -148,21 +195,24 @@ const FallingPiece: React.FC<{
   const isCapsule = colors.length === 2;
 
   return (
-    <TapGestureHandler maxDist={10} onHandlerStateChange={handleTap}>
+    <TapGestureHandler maxDist={10} hitSlop={grabSlop} onHandlerStateChange={handleTap}>
       <Animated.View
         style={[
           styles.piece,
           {
-            left: BOARD_PADDING + visualX * CELL_PITCH,
-            top: BOARD_PADDING + visualY * CELL_PITCH,
-            width: (maxDX + 1) * CELL_PITCH,
-            height: (maxDY + 1) * CELL_PITCH,
+            width: (maxDX + 1) * cellPitch,
+            height: (maxDY + 1) * cellPitch,
             zIndex: pill.held ? 10 : 2,
+            transform: [
+              { translateX: BOARD_PADDING + visualX * cellPitch },
+              { translateY: BOARD_PADDING + visualY * cellPitch },
+            ],
           },
         ]}
       >
         <PanGestureHandler
-          minDist={5}
+          minDist={4}
+          hitSlop={grabSlop}
           onGestureEvent={handlePan}
           onHandlerStateChange={handlePan}
         >
@@ -171,19 +221,16 @@ const FallingPiece: React.FC<{
               <View
                 key={index}
                 style={[
-                  styles.cell,
+                  cellStyles.cell,
                   styles.pieceCell,
                   {
-                    left: (pos.x - originX) * CELL_PITCH + CELL_MARGIN,
-                    top: (pos.y - originY) * CELL_PITCH + CELL_MARGIN,
+                    left: (pos.x - originX) * cellPitch + CELL_MARGIN,
+                    top: (pos.y - originY) * cellPitch + CELL_MARGIN,
                     borderColor: isSelected
                       ? theme.colors.warning
                       : isCapsule
                         ? 'rgba(255,255,255,0.6)'
                         : 'rgba(200,200,255,0.5)',
-                    borderRadius: isCapsule
-                      ? theme.borderRadius.sm
-                      : theme.borderRadius.sm * 1.5,
                   },
                   isSelected && styles.activeCellShadow,
                 ]}
@@ -203,64 +250,92 @@ const FallingPiece: React.FC<{
   );
 };
 
-export const GameBoard: React.FC<GameBoardProps> = ({ board, fallingPills, gameEngine }) => {
+// Subscribes to the engine's board changes itself, so the 60fps fall
+// animation only re-renders this subtree — never the screen around it.
+export const GameBoard: React.FC<GameBoardProps> = React.memo(({ gameEngine }) => {
+  const [, setTick] = useState(0);
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
   const boardScale = useSharedValue(0.95);
+
+  useEffect(() => {
+    gameEngine.setCallbacks({
+      onBoardChange: () => setTick(t => (t + 1) % 1000000),
+    });
+  }, [gameEngine]);
 
   useEffect(() => {
     boardScale.value = withSpring(1, { damping: 12, stiffness: 180 });
   }, []);
 
+  const onLayout = (event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    const next = computeMetrics(width, height);
+    setMetrics(prev =>
+      prev && next && prev.cellSize === next.cellSize ? prev : next
+    );
+  };
+
+  const cellStyles = useMemo(
+    () => (metrics ? makeCellStyles(metrics.cellSize) : null),
+    [metrics]
+  );
+
   const boardAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: boardScale.value }],
   }));
 
+  const board = gameEngine.getBoard();
+  const fallingPills = gameEngine.getAllFallingPills();
   const selectedPill = gameEngine.getSelectedPill();
 
   return (
-    <View style={styles.container}>
-      <Animated.View style={[styles.boardWrapper, boardAnimatedStyle]}>
-        <LinearGradient
-          colors={['rgba(255,255,255,0.1)', 'rgba(255,255,255,0.05)']}
-          style={styles.boardBackground}
-        >
-          <View style={styles.board}>
-            <StaticGrid board={board} version={board.version} />
-            <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-              {fallingPills
-                .filter(pill => pill.isActive)
-                .map(pill => (
-                  <FallingPiece
-                    key={pill.id}
-                    pill={pill}
-                    board={board}
-                    gameEngine={gameEngine}
-                    isSelected={pill === selectedPill}
-                  />
-                ))}
+    <View style={styles.container} onLayout={onLayout}>
+      {metrics && cellStyles && (
+        <Animated.View style={[styles.boardWrapper, boardAnimatedStyle]}>
+          <LinearGradient
+            colors={['rgba(255,255,255,0.1)', 'rgba(255,255,255,0.05)']}
+            style={styles.boardBackground}
+          >
+            <View style={styles.board}>
+              <StaticGrid board={board} version={board.version} cellStyles={cellStyles} />
+              <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+                {fallingPills
+                  .filter(pill => pill.isActive)
+                  .map(pill => (
+                    <FallingPiece
+                      key={pill.id}
+                      pill={pill}
+                      board={board}
+                      gameEngine={gameEngine}
+                      isSelected={pill === selectedPill}
+                      metrics={metrics}
+                      cellStyles={cellStyles}
+                    />
+                  ))}
+              </View>
             </View>
-          </View>
-        </LinearGradient>
-      </Animated.View>
+          </LinearGradient>
+        </Animated.View>
+      )}
     </View>
   );
-};
+});
 
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
+    alignSelf: 'stretch',
     alignItems: 'center',
     justifyContent: 'center',
-    flex: isWeb ? 0 : 1,
   },
   boardWrapper: {
     borderRadius: theme.borderRadius.lg,
     ...theme.shadows.lg,
-    marginHorizontal: isWeb ? 20 : 0,
-    marginVertical: isWeb ? 10 : 0,
   },
   boardBackground: {
     borderRadius: theme.borderRadius.lg,
-    padding: isWeb ? 12 : 8,
-    borderWidth: isWeb ? 3 : 2,
+    padding: FRAME_PADDING,
+    borderWidth: FRAME_BORDER,
     borderColor: theme.colors.boardBorder,
     backgroundColor: theme.colors.boardBackground,
   },
@@ -268,31 +343,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.3)',
     borderRadius: theme.borderRadius.md,
     padding: BOARD_PADDING,
-    ...(isWeb ? { userSelect: 'none' } : {}),
+    ...(isWeb ? { userSelect: 'none' as any } : {}),
   },
   row: {
     flexDirection: 'row',
   },
-  cell: {
-    width: CELL_SIZE,
-    height: CELL_SIZE,
-    borderWidth: isWeb ? 1.5 : 1,
-    margin: CELL_MARGIN,
-    borderRadius: theme.borderRadius.sm,
-    overflow: 'hidden',
-  },
   cellContent: {
     flex: 1,
   },
-  emptyCell: {
-    backgroundColor: theme.colors.cellEmpty,
-    borderColor: theme.colors.cellBorder,
-  },
-  virusCell: {
-    borderRadius: CELL_SIZE / 2,
-  },
   piece: {
     position: 'absolute',
+    top: 0,
+    left: 0,
   },
   pieceInner: {
     flex: 1,

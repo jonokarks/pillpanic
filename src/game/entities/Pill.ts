@@ -8,6 +8,7 @@ export class Pill implements PillType {
   orientation: Orientation;
   colors: [Color, Color];
   isActive: boolean;
+  isUserControllable: boolean; // Regular pills are user-controllable
 
   constructor(colors: [Color, Color], startX: number = 3) {
     this.id = `pill-${Date.now()}`;
@@ -15,6 +16,7 @@ export class Pill implements PillType {
     this.orientation = Orientation.HORIZONTAL;
     this.colors = colors;
     this.isActive = true;
+    this.isUserControllable = true; // Regular pills are user-controllable
   }
 
   getPositions(): [Position, Position] {
@@ -53,25 +55,126 @@ export class Pill implements PillType {
   }
 
   canRotate(board: Board): boolean {
-    const { x, y } = this.position;
-    
-    if (this.orientation === Orientation.HORIZONTAL) {
-      // Check if can rotate to vertical
-      return board.isValidPosition(x, y + 1) && board.isEmpty(x, y + 1);
-    } else {
-      // Check if can rotate to horizontal
-      return board.isValidPosition(x + 1, y) && board.isEmpty(x + 1, y);
-    }
+    // Always allow rotation attempts - wall kicks will handle positioning
+    return true;
   }
 
   rotate(): void {
     if (this.orientation === Orientation.HORIZONTAL) {
+      // Rotating horizontal to vertical (clockwise)
+      // [left, right] becomes [left, right] (left stays top, right becomes bottom)
       this.orientation = Orientation.VERTICAL;
+      // No color change needed - left becomes top, right becomes bottom
     } else {
+      // Rotating vertical to horizontal (clockwise)  
+      // [top, bottom] becomes [bottom, top] (top moves right, bottom moves left)
       this.orientation = Orientation.HORIZONTAL;
-      // Swap colors when rotating from vertical to horizontal
+      // Swap colors: top becomes right, bottom becomes left
       this.colors = [this.colors[1], this.colors[0]];
     }
+  }
+
+  tryRotateWithKicks(board: Board): boolean {
+    const originalX = this.position.x;
+    const originalY = this.position.y;
+    const originalOrientation = this.orientation;
+    const originalColors = [...this.colors] as [Color, Color];
+    
+    // Get current positions before rotation
+    const currentPositions = this.getPositions();
+
+    // Try rotation at current position first
+    this.rotate();
+    const newPositions = this.getPositions();
+    
+    // Check if rotation works at current position
+    let canRotateHere = true;
+    for (const pos of newPositions) {
+      if (!board.isValidPosition(pos.x, pos.y)) {
+        canRotateHere = false;
+        break;
+      }
+      
+      // Check if position is empty OR occupied by the current pill itself
+      const cell = board.getCell(pos.x, pos.y);
+      if (cell && cell.type !== CellType.EMPTY) {
+        // Check if this position was occupied by the rotating pill
+        const wasOccupiedBySelf = currentPositions.some(
+          oldPos => oldPos.x === pos.x && oldPos.y === pos.y
+        );
+        if (!wasOccupiedBySelf) {
+          canRotateHere = false;
+          break;
+        }
+      }
+    }
+    
+    if (canRotateHere) {
+      return true;
+    }
+
+    // Try wall kicks - more attempts for better success rate
+    const kickOffsets: Array<{dx: number, dy: number}> = [];
+    
+    if (originalOrientation === Orientation.HORIZONTAL) {
+      // Rotating from horizontal to vertical
+      kickOffsets.push({dx: 0, dy: 0});   // Try current position again (in case of self-collision)
+      kickOffsets.push({dx: -1, dy: 0});  // Try left if at right edge
+      kickOffsets.push({dx: 1, dy: 0});   // Try right
+      kickOffsets.push({dx: 0, dy: -1});  // Try up if at bottom
+      kickOffsets.push({dx: 0, dy: 1});   // Try down
+      kickOffsets.push({dx: -1, dy: -1}); // Try up-left
+      kickOffsets.push({dx: 1, dy: -1});  // Try up-right
+    } else {
+      // Rotating from vertical to horizontal
+      kickOffsets.push({dx: 0, dy: 0});   // Try current position again (in case of self-collision)
+      kickOffsets.push({dx: -1, dy: 0});  // Try left
+      kickOffsets.push({dx: 1, dy: 0});   // Try right  
+      kickOffsets.push({dx: 0, dy: -1});  // Try up
+      kickOffsets.push({dx: 0, dy: 1});   // Try down
+      kickOffsets.push({dx: -1, dy: -1}); // Try diagonal up-left
+      kickOffsets.push({dx: 1, dy: -1});  // Try diagonal up-right
+    }
+
+    // Try each kick offset
+    for (const offset of kickOffsets) {
+      this.position.x = originalX + offset.dx;
+      this.position.y = originalY + offset.dy;
+      
+      const kickedPositions = this.getPositions();
+      let canRotateWithKick = true;
+      
+      for (const pos of kickedPositions) {
+        if (!board.isValidPosition(pos.x, pos.y)) {
+          canRotateWithKick = false;
+          break;
+        }
+        
+        // Check if position is empty OR occupied by the current pill itself
+        const cell = board.getCell(pos.x, pos.y);
+        if (cell && cell.type !== CellType.EMPTY) {
+          // Check if this position was occupied by the rotating pill's original position
+          const wasOccupiedBySelf = currentPositions.some(
+            oldPos => oldPos.x === pos.x && oldPos.y === pos.y
+          );
+          if (!wasOccupiedBySelf) {
+            canRotateWithKick = false;
+            break;
+          }
+        }
+      }
+      
+      if (canRotateWithKick) {
+        return true;
+      }
+    }
+
+    // Rotation failed, restore original state
+    this.position.x = originalX;
+    this.position.y = originalY;
+    this.orientation = originalOrientation;
+    this.colors = originalColors;
+    return false;
   }
 
   place(board: Board): void {

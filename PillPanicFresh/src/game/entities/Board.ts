@@ -54,10 +54,9 @@ export class Board implements GameBoard {
           type: CellType.VIRUS,
           color: virus.color,
         };
-        console.log(`🦠 Placed virus at (${virus.position.x}, ${virus.position.y}) with color ${virus.color}`);
       }
     });
-    console.log(`🦠 Total viruses on board: ${this.countViruses()}`);
+    this.version++;
   }
 
   countViruses(): number {

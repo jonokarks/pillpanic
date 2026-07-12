@@ -3,8 +3,26 @@ import { theme } from '../../utils/theme';
 export const BOARD_WIDTH = 8;
 export const BOARD_HEIGHT = 16;
 export const CELL_SIZE = theme.dimensions.cellSize;
-export const FALL_SPEED = 800; // milliseconds - slower for better control
-export const FAST_FALL_SPEED = 80; // slightly slower for smoother fast drop
+
+// Classic Dr. Mario speed system
+export const BASE_FALL_SPEEDS = {
+  LOW: 1200,    // slowest
+  MEDIUM: 800,  // medium
+  HIGH: 400,    // fastest
+};
+
+// Speed increases every 10 capsules placed (classic Dr. Mario behavior)
+export const SPEED_INCREASE_INTERVAL = 10;
+export const MAX_SPEED_INCREASES = 49; // Maximum of 50 speed levels total
+export const SPEED_INCREASE_FACTOR = 0.95; // Each increase multiplies speed by this (makes it faster)
+
+export const FAST_FALL_SPEED = 50; // Fast drop speed
+
+// Classic Dr. Mario virus count formula
+export const getVirusCount = (level: number): number => {
+  if (level >= 20) return 84; // Level 20+ always has 84 viruses
+  return (level * 4) + 4; // Classic formula: (level * 4) + 4
+};
 
 export enum CellType {
   EMPTY = 'EMPTY',

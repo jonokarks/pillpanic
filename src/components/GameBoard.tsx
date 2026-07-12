@@ -21,7 +21,8 @@ import {
   COLOR_GRADIENTS,
   VIRUS_GRADIENTS,
   CellType,
-  Color
+  Color,
+  Direction
 } from '../game/utils/constants';
 import { theme } from '../utils/theme';
 

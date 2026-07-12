@@ -41,14 +41,30 @@ export interface GameBoard {
   cells: Cell[][];
 }
 
+export enum SpeedSetting {
+  LOW = 'LOW',
+  MEDIUM = 'MEDIUM',
+  HIGH = 'HIGH',
+}
+
 export interface GameStats {
   score: number;
   level: number;
   virusCount: number;
   linesCleared: number;
+  capsulesPlaced: number;
+  currentSpeedLevel: number;
+  speedSetting: SpeedSetting;
 }
 
 export interface SplitResult {
   position: Position;
   color: Color;
+}
+
+export interface SavedGameState {
+  currentLevel: number;
+  totalScore: number;
+  speedSetting: SpeedSetting;
+  lastPlayed: string;
 }

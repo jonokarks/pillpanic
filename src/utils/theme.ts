@@ -37,7 +37,9 @@ export const theme = {
       disabled: '#6B6B83',
     },
     success: '#4ECDC4',
+    successGradient: ['#4ECDC4', '#2C9B91'],
     error: '#FF6B6B',
+    errorGradient: ['#FF6B6B', '#C44569'],
     warning: '#FFE66D',
     // Game specific
     virus: {
@@ -113,8 +115,72 @@ export const theme = {
   dimensions: {
     screenWidth,
     screenHeight,
-    cellSize: Math.min(screenWidth * 0.9 / 8, 45), // Responsive cell size
-    maxContentWidth: 1200, // Max width for content on large screens
+    cellSize: (() => {
+      if (isWeb) {
+        // OPTIMIZED calculation - balance between size and guaranteed fit
+        const headerHeight = 90; // Reduced from 120px
+        const padding = 50; // Reduced from 80px
+        const margin = 30; // Reduced from 40px
+        const browserChrome = 60; // Reduced from 100px
+        
+        // Use 65% of screen height (increased from 50%)
+        const availableScreenHeight = screenHeight * 0.65;
+        const availableHeight = availableScreenHeight - browserChrome;
+        
+        // Smart breakpoints for different screen sizes
+        const isVeryLargeScreen = screenWidth >= 1440;
+        const isLargeScreen = screenWidth >= 1200 && screenWidth < 1440;
+        const isMediumScreen = screenWidth >= 900 && screenWidth < 1200;
+        
+        console.log('OPTIMIZED Desktop sizing:', { 
+          screenWidth,
+          screenHeight, 
+          availableScreenHeight,
+          browserChrome,
+          availableHeight,
+          screenCategory: isVeryLargeScreen ? 'very-large' : isLargeScreen ? 'large' : isMediumScreen ? 'medium' : 'small'
+        });
+        
+        // Calculate for 16 rows with optimized spacing
+        const boardPadding = 12; // Reduced padding
+        const cellMargin = 1.5; // Optimized margin
+        const totalSpacing = (boardPadding * 2) + (16 * cellMargin * 2);
+        
+        const spaceForCells = Math.max(availableHeight - totalSpacing, 400); // Increased minimum to 400px
+        const calculatedCellSize = Math.floor(spaceForCells / 16);
+        
+        console.log('OPTIMIZED Cell calculation:', { 
+          spaceForCells, 
+          calculatedCellSize,
+          totalSpacing
+        });
+        
+        // BIGGER ranges while maintaining safety
+        if (isVeryLargeScreen) {
+          const finalSize = Math.max(Math.min(calculatedCellSize, 50), 35); // 35-50px range
+          console.log('Very Large Screen - Final cell size:', finalSize);
+          return finalSize;
+        } else if (isLargeScreen) {
+          const finalSize = Math.max(Math.min(calculatedCellSize, 45), 30); // 30-45px range
+          console.log('Large Screen - Final cell size:', finalSize);
+          return finalSize;
+        } else if (isMediumScreen) {
+          const finalSize = Math.max(Math.min(calculatedCellSize, 40), 25); // 25-40px range
+          console.log('Medium Screen - Final cell size:', finalSize);
+          return finalSize;
+        } else {
+          const finalSize = Math.max(Math.min(calculatedCellSize, 35), 22); // 22-35px range
+          console.log('Small Screen - Final cell size:', finalSize);
+          return finalSize;
+        }
+      }
+      
+      // Mobile: use width-based calculation
+      return Math.min(screenWidth * 0.9 / 8, 45);
+    })(),
+    maxContentWidth: 1400, // Increased for better desktop layout
+    boardWidth: 8,
+    boardHeight: 16,
   },
 };
 

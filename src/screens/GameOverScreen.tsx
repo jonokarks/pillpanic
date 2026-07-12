@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import LinearGradient from 'react-native-linear-gradient';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -30,6 +30,8 @@ export const GameOverScreen: React.FC<GameOverScreenProps> = ({
   onNextLevel,
   onBackToMenu,
 }) => {
+  console.log('GameOverScreen mounted:', { isWin, score, level, hasNextLevel: !!onNextLevel });
+  
   const titleScale = useSharedValue(0);
   const contentOpacity = useSharedValue(0);
   const buttonScale = useSharedValue(0);
@@ -141,7 +143,7 @@ export const GameOverScreen: React.FC<GameOverScreenProps> = ({
             {isWin && onNextLevel && (
               <ButtonComponent
                 onPress={onNextLevel}
-                colors={theme.colors.success}
+                colors={theme.colors.successGradient}
                 text="NEXT LEVEL"
                 index={0}
               />
@@ -150,7 +152,7 @@ export const GameOverScreen: React.FC<GameOverScreenProps> = ({
             <ButtonComponent
               onPress={onRestart}
               colors={theme.colors.secondary.blueGradient}
-              text="RESTART"
+              text="TRY AGAIN"
               index={1}
             />
             

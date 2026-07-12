@@ -131,47 +131,23 @@ export const theme = {
         const isVeryLargeScreen = screenWidth >= 1440;
         const isLargeScreen = screenWidth >= 1200 && screenWidth < 1440;
         const isMediumScreen = screenWidth >= 900 && screenWidth < 1200;
-        
-        console.log('OPTIMIZED Desktop sizing:', { 
-          screenWidth,
-          screenHeight, 
-          availableScreenHeight,
-          browserChrome,
-          availableHeight,
-          screenCategory: isVeryLargeScreen ? 'very-large' : isLargeScreen ? 'large' : isMediumScreen ? 'medium' : 'small'
-        });
-        
+
         // Calculate for 16 rows with optimized spacing
-        const boardPadding = 12; // Reduced padding
-        const cellMargin = 1.5; // Optimized margin
+        const boardPadding = 12;
+        const cellMargin = 1.5;
         const totalSpacing = (boardPadding * 2) + (16 * cellMargin * 2);
-        
-        const spaceForCells = Math.max(availableHeight - totalSpacing, 400); // Increased minimum to 400px
+
+        const spaceForCells = Math.max(availableHeight - totalSpacing, 400);
         const calculatedCellSize = Math.floor(spaceForCells / 16);
-        
-        console.log('OPTIMIZED Cell calculation:', { 
-          spaceForCells, 
-          calculatedCellSize,
-          totalSpacing
-        });
-        
-        // BIGGER ranges while maintaining safety
+
         if (isVeryLargeScreen) {
-          const finalSize = Math.max(Math.min(calculatedCellSize, 50), 35); // 35-50px range
-          console.log('Very Large Screen - Final cell size:', finalSize);
-          return finalSize;
+          return Math.max(Math.min(calculatedCellSize, 50), 35);
         } else if (isLargeScreen) {
-          const finalSize = Math.max(Math.min(calculatedCellSize, 45), 30); // 30-45px range
-          console.log('Large Screen - Final cell size:', finalSize);
-          return finalSize;
+          return Math.max(Math.min(calculatedCellSize, 45), 30);
         } else if (isMediumScreen) {
-          const finalSize = Math.max(Math.min(calculatedCellSize, 40), 25); // 25-40px range
-          console.log('Medium Screen - Final cell size:', finalSize);
-          return finalSize;
+          return Math.max(Math.min(calculatedCellSize, 40), 25);
         } else {
-          const finalSize = Math.max(Math.min(calculatedCellSize, 35), 22); // 22-35px range
-          console.log('Small Screen - Final cell size:', finalSize);
-          return finalSize;
+          return Math.max(Math.min(calculatedCellSize, 35), 22);
         }
       }
       

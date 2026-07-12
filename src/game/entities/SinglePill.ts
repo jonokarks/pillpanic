@@ -1,18 +1,20 @@
 import { Color, CellType } from '../utils/constants';
-import { Position } from '../utils/types';
+import { Position, Controllable } from '../utils/types';
 import { Board } from './Board';
 
-export class SinglePill {
+export class SinglePill implements Controllable {
   id: string;
   position: Position;
   color: Color;
   isActive: boolean;
+  isUserControllable: boolean; // Split pills are not user-controllable
 
-  constructor(color: Color, position: Position) {
+  constructor(color: Color, position: Position, isUserControllable: boolean = false) {
     this.id = `single-${Date.now()}-${Math.random()}`;
     this.position = { ...position };
     this.color = color;
     this.isActive = true;
+    this.isUserControllable = isUserControllable;
   }
 
   getPositions(): Position[] {

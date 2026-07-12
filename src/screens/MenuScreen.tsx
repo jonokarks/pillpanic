@@ -9,7 +9,7 @@ import {
   ScrollView,
   Platform 
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import LinearGradient from 'react-native-linear-gradient';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -26,7 +26,11 @@ const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
 
 interface MenuScreenProps {
-  onStartGame: (level: number) => void;
+  onStartNewGame: () => void;
+  onContinueGame: () => void;
+  onOpenSettings: () => void;
+  hasSavedGame: boolean;
+  savedLevel?: number;
 }
 
 // Memoized animated pill component for better performance
@@ -84,58 +88,14 @@ const AnimatedPill = memo(({ index, color }: { index: number; color: string[] })
   );
 });
 
-// Memoized level button for better performance
-const LevelButton = memo(({ 
-  level, 
-  index, 
-  onPress,
-  isVisible 
-}: { 
-  level: number; 
-  index: number; 
-  onPress: () => void;
-  isVisible: boolean;
+
+export const MenuScreen: React.FC<MenuScreenProps> = ({ 
+  onStartNewGame, 
+  onContinueGame, 
+  onOpenSettings, 
+  hasSavedGame,
+  savedLevel 
 }) => {
-  const scale = useSharedValue(0);
-  const pressed = useSharedValue(false);
-
-  useEffect(() => {
-    if (isVisible) {
-      scale.value = withSequence(
-        withTiming(0, { duration: 100 * index }),
-        withSpring(1, { damping: 10, stiffness: 150 })
-      );
-    }
-  }, [isVisible, index]);
-
-  const animatedStyle = useAnimatedStyle(() => {
-    const pressScale = pressed.value ? 0.9 : 1;
-    return {
-      transform: [{ scale: scale.value * pressScale }],
-      opacity: scale.value,
-    };
-  });
-
-  return (
-    <Animated.View style={animatedStyle}>
-      <TouchableOpacity
-        onPressIn={() => (pressed.value = true)}
-        onPressOut={() => (pressed.value = false)}
-        onPress={onPress}
-        activeOpacity={0.8}
-      >
-        <LinearGradient
-          colors={theme.colors.secondary.blueGradient}
-          style={styles.levelButton}
-        >
-          <Text style={styles.levelButtonText}>{level}</Text>
-        </LinearGradient>
-      </TouchableOpacity>
-    </Animated.View>
-  );
-});
-
-export const MenuScreen: React.FC<MenuScreenProps> = ({ onStartGame }) => {
   const titleOpacity = useSharedValue(0);
   const contentOpacity = useSharedValue(0);
   const [isContentVisible, setIsContentVisible] = React.useState(false);
@@ -183,22 +143,48 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({ onStartGame }) => {
       </Animated.View>
 
       <Animated.View style={[styles.contentWrapper, contentAnimatedStyle]}>
-        <View style={styles.levelContainer}>
-          <Text style={styles.levelTitle}>Select Level</Text>
-          <View style={styles.levelButtons}>
-            {[1, 2, 3, 4, 5].map((level, index) => (
-              <LevelButton
-                key={level}
-                level={level}
-                index={index}
-                onPress={() => {
-                  console.log('Level button pressed:', level);
-                  onStartGame(level);
-                }}
-                isVisible={isContentVisible}
-              />
-            ))}
-          </View>
+        <View style={styles.menuButtonsContainer}>
+          {hasSavedGame && (
+            <TouchableOpacity
+              onPress={onContinueGame}
+              activeOpacity={0.8}
+              style={styles.menuButton}
+            >
+              <LinearGradient
+                colors={theme.colors.successGradient}
+                style={styles.continueButton}
+              >
+                <Text style={styles.continueButtonText}>CONTINUE</Text>
+                <Text style={styles.continueSubtext}>Level {savedLevel}</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          )}
+          
+          <TouchableOpacity
+            onPress={onStartNewGame}
+            activeOpacity={0.8}
+            style={styles.menuButton}
+          >
+            <LinearGradient
+              colors={theme.colors.secondary.blueGradient}
+              style={styles.button}
+            >
+              <Text style={styles.buttonText}>NEW GAME</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            onPress={onOpenSettings}
+            activeOpacity={0.8}
+            style={styles.menuButton}
+          >
+            <LinearGradient
+              colors={['rgba(255,255,255,0.2)', 'rgba(255,255,255,0.1)']}
+              style={styles.button}
+            >
+              <Text style={styles.buttonText}>SETTINGS</Text>
+            </LinearGradient>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.instructionsCard}>
@@ -327,36 +313,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: responsiveSpacing(20),
   },
-  levelContainer: {
+  menuButtonsContainer: {
     marginBottom: responsiveSpacing(40),
-  },
-  levelTitle: {
-    fontSize: responsiveFontSize(28),
-    fontWeight: '700',
-    color: theme.colors.text.primary,
-    marginBottom: responsiveSpacing(24),
-    textAlign: 'center',
-    textTransform: 'uppercase',
-    letterSpacing: 2,
-  },
-  levelButtons: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: responsiveSpacing(12),
-    flexWrap: 'wrap',
-  },
-  levelButton: {
-    width: responsiveSpacing(60),
-    height: responsiveSpacing(60),
-    borderRadius: theme.borderRadius.lg,
-    justifyContent: 'center',
     alignItems: 'center',
-    ...theme.shadows.md,
+    gap: responsiveSpacing(16),
   },
-  levelButtonText: {
-    color: theme.colors.text.primary,
-    fontSize: responsiveFontSize(24),
-    fontWeight: '800',
+  menuButton: {
+    width: '100%',
+    maxWidth: 300,
   },
   instructionsCard: {
     borderRadius: theme.borderRadius.xl,
@@ -399,5 +363,85 @@ const styles = StyleSheet.create({
     fontSize: responsiveFontSize(16),
     color: theme.colors.text.secondary,
     flex: 1,
+  },
+  speedContainer: {
+    marginBottom: responsiveSpacing(30),
+    alignItems: 'center',
+  },
+  speedTitle: {
+    fontSize: responsiveFontSize(24),
+    fontWeight: '700',
+    color: theme.colors.text.primary,
+    marginBottom: responsiveSpacing(16),
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    letterSpacing: 2,
+  },
+  speedButtons: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: responsiveSpacing(12),
+    marginBottom: responsiveSpacing(12),
+  },
+  speedButton: {
+    paddingHorizontal: responsiveSpacing(20),
+    paddingVertical: responsiveSpacing(12),
+    borderRadius: theme.borderRadius.md,
+    minWidth: responsiveSpacing(80),
+    alignItems: 'center',
+    ...theme.shadows.sm,
+  },
+  selectedSpeedButton: {
+    ...theme.shadows.md,
+  },
+  speedButtonText: {
+    fontSize: responsiveFontSize(16),
+    fontWeight: '600',
+    color: theme.colors.text.secondary,
+    textTransform: 'capitalize',
+  },
+  selectedSpeedButtonText: {
+    color: theme.colors.text.primary,
+    fontWeight: '700',
+  },
+  speedDescription: {
+    fontSize: responsiveFontSize(14),
+    color: theme.colors.text.secondary,
+    textAlign: 'center',
+    fontStyle: 'italic',
+    maxWidth: 300,
+  },
+  button: {
+    paddingHorizontal: responsiveSpacing(40),
+    paddingVertical: responsiveSpacing(18),
+    borderRadius: theme.borderRadius.xl,
+    alignItems: 'center',
+    ...theme.shadows.md,
+  },
+  buttonText: {
+    color: theme.colors.text.primary,
+    fontSize: responsiveFontSize(20),
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  continueButton: {
+    paddingHorizontal: responsiveSpacing(40),
+    paddingVertical: responsiveSpacing(18),
+    borderRadius: theme.borderRadius.xl,
+    alignItems: 'center',
+    ...theme.shadows.lg,
+  },
+  continueButtonText: {
+    color: theme.colors.text.primary,
+    fontSize: responsiveFontSize(20),
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  continueSubtext: {
+    color: theme.colors.text.primary,
+    fontSize: responsiveFontSize(14),
+    fontWeight: '600',
+    marginTop: 4,
+    opacity: 0.9,
   },
 });
