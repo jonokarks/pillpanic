@@ -11,7 +11,7 @@ import { StatsScreen } from './src/screens/StatsScreen';
 import { LoadingScreen } from './src/screens/LoadingScreen';
 import { GameSettings, Storage } from './src/utils/storage';
 import { SoundManager } from './src/utils/SoundManager';
-import { SpeedSetting, GameMode, SavedGameState } from './src/game/utils/types';
+import { SpeedSetting, GameMode, SavedGameState, EndlessSnapshot } from './src/game/utils/types';
 
 type Screen = 'menu' | 'game' | 'settings' | 'tutorial' | 'levels' | 'stats';
 
@@ -28,16 +28,20 @@ export default function App() {
   const [tutorialSeen, setTutorialSeen] = useState(false);
   const [settings, setSettings] = useState<GameSettings>(DEFAULT_SETTINGS);
   const [savedGame, setSavedGame] = useState<SavedGameState | null>(null);
+  const [endlessSave, setEndlessSave] = useState<EndlessSnapshot | null>(null);
   const [startLevel, setStartLevel] = useState(1);
   const [startScore, setStartScore] = useState(0);
   const [gameMode, setGameMode] = useState<GameMode>(GameMode.CLASSIC);
+  // Snapshot handed to GameScreen to resume an Endless run (null = fresh)
+  const [resumeSnapshot, setResumeSnapshot] = useState<EndlessSnapshot | null>(null);
   const screenOpacity = useSharedValue(1);
 
   useEffect(() => {
     (async () => {
-      const [loadedSettings, loadedGame, hasSeenTutorial] = await Promise.all([
+      const [loadedSettings, loadedGame, loadedEndless, hasSeenTutorial] = await Promise.all([
         Storage.loadSettings(),
         Storage.loadGameProgress(),
+        Storage.loadEndlessGame(),
         Storage.hasSeenTutorial(),
       ]);
       if (loadedSettings) {
@@ -46,6 +50,7 @@ export default function App() {
         SoundManager.getInstance().setHapticsEnabled(loadedSettings.hapticsEnabled);
       }
       setSavedGame(loadedGame);
+      setEndlessSave(loadedEndless);
       setTutorialSeen(hasSeenTutorial);
       setIsReady(true);
     })();
@@ -85,12 +90,43 @@ export default function App() {
     await handleStartNewGame();
   };
 
-  // Virus Buster style continuous play: one run, waves keep coming
-  const handleStartEndless = () => {
+  // Virus Buster style continuous play: one run, waves keep coming.
+  // Starts fresh, discarding any previous saved run.
+  const handleStartEndless = async () => {
+    await Storage.clearEndlessGame();
+    setEndlessSave(null);
+    setResumeSnapshot(null);
     setStartLevel(1);
     setStartScore(0);
     setGameMode(GameMode.ENDLESS);
     setCurrentScreen('game');
+  };
+
+  // Resume a previously saved Endless run from its snapshot
+  const handleResumeEndless = () => {
+    if (!endlessSave) {
+      handleStartEndless();
+      return;
+    }
+    setResumeSnapshot(endlessSave);
+    setStartLevel(endlessSave.wave);
+    setStartScore(endlessSave.score);
+    setGameMode(GameMode.ENDLESS);
+    setCurrentScreen('game');
+  };
+
+  // Persist the run each wave / when leaving, so it can be resumed later
+  const handleEndlessCheckpoint = async (snapshot: EndlessSnapshot) => {
+    const stamped = { ...snapshot, lastPlayed: new Date().toISOString() };
+    setEndlessSave(stamped);
+    await Storage.saveEndlessGame(stamped);
+  };
+
+  // Run finished (game over): drop the save so it can't be resumed
+  const handleEndlessEnded = async () => {
+    setEndlessSave(null);
+    setResumeSnapshot(null);
+    await Storage.clearEndlessGame();
   };
 
   const handleContinueGame = () => {
@@ -140,6 +176,7 @@ export default function App() {
         <MenuScreen
           onStartNewGame={handleStartNewGame}
           onStartEndless={handleStartEndless}
+          onResumeEndless={handleResumeEndless}
           onContinueGame={handleContinueGame}
           onOpenSettings={() => setCurrentScreen('settings')}
           onOpenLevels={handlePlay}
@@ -147,6 +184,8 @@ export default function App() {
           onOpenStats={() => setCurrentScreen('stats')}
           hasSavedGame={savedGame !== null}
           savedLevel={savedGame?.currentLevel}
+          hasEndlessSave={endlessSave !== null}
+          endlessWave={endlessSave?.wave}
           reducedMotion={settings.reducedMotion}
         />
       )}
@@ -158,8 +197,11 @@ export default function App() {
           level={startLevel}
           speedSetting={settings.speedSetting}
           gameMode={gameMode}
+          endlessSnapshot={gameMode === GameMode.ENDLESS ? resumeSnapshot : null}
           onBackToMenu={handleBackToMenu}
           onGameComplete={handleGameComplete}
+          onEndlessCheckpoint={handleEndlessCheckpoint}
+          onEndlessEnded={handleEndlessEnded}
           savedTotalScore={startScore}
           reducedMotion={settings.reducedMotion}
         />

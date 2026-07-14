@@ -79,13 +79,10 @@ export const GameOverScreen: React.FC<GameOverScreenProps> = ({
     <LinearGradient colors={[theme.colors.background, theme.colors.backgroundLight]} style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.content}>
-          <View style={styles.ambientTray}>
+          <Animated.View style={[styles.titleContainer, titleAnimatedStyle]}>
             <View style={[styles.resultSeal, isWin ? styles.winSeal : styles.loseSeal]}>
               <View style={styles.resultSealInner} />
             </View>
-          </View>
-
-          <Animated.View style={[styles.titleContainer, titleAnimatedStyle]}>
             <Text style={styles.kicker}>{isWin ? 'Level complete' : 'Run ended'}</Text>
             <Text style={[styles.title, isWin ? styles.winTitle : styles.loseTitle]}>
               {isWin ? 'Lab Cleared' : 'Lab Overflow'}
@@ -149,21 +146,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: responsiveSpacing(20),
   },
-  ambientTray: {
-    position: 'absolute',
-    width: '78%',
-    maxWidth: 420,
-    height: 160,
-    top: '14%',
-    borderRadius: theme.borderRadius.xl,
-    backgroundColor: 'rgba(247,251,248,0.07)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
-  },
   resultSeal: {
-    position: 'absolute',
-    alignSelf: 'center',
-    top: -28,
     width: 78,
     height: 78,
     borderRadius: 39,
@@ -171,6 +154,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 3,
     borderColor: 'rgba(255,255,255,0.26)',
+    marginBottom: responsiveSpacing(18),
     ...theme.shadows.md,
   },
   winSeal: {

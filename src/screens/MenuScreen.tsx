@@ -26,6 +26,7 @@ const isWeb = Platform.OS === 'web';
 interface MenuScreenProps {
   onStartNewGame: () => void;
   onStartEndless: () => void;
+  onResumeEndless: () => void;
   onContinueGame: () => void;
   onOpenSettings: () => void;
   onOpenLevels: () => void;
@@ -33,6 +34,8 @@ interface MenuScreenProps {
   onOpenStats: () => void;
   hasSavedGame: boolean;
   savedLevel?: number;
+  hasEndlessSave: boolean;
+  endlessWave?: number;
   reducedMotion: boolean;
 }
 
@@ -116,6 +119,7 @@ const CapsuleButton = ({
 export const MenuScreen: React.FC<MenuScreenProps> = ({
   onStartNewGame,
   onStartEndless,
+  onResumeEndless,
   onContinueGame,
   onOpenSettings,
   onOpenLevels,
@@ -123,6 +127,8 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({
   onOpenStats,
   hasSavedGame,
   savedLevel,
+  hasEndlessSave,
+  endlessWave,
   reducedMotion,
 }) => {
   const titleOpacity = useSharedValue(0);
@@ -151,7 +157,6 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({
   const content = (
     <View style={styles.innerContainer}>
       <View style={styles.ambientLayer} pointerEvents="none">
-        <View style={styles.labShelf} />
         <View style={styles.bubbleOne} />
         <View style={styles.bubbleTwo} />
         {!reducedMotion && pillColors.map((color, index) => (
@@ -183,11 +188,17 @@ export const MenuScreen: React.FC<MenuScreenProps> = ({
           </TouchableOpacity>
         )}
 
+        {hasEndlessSave && (
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Resume endless run, wave ${endlessWave}`} onPress={onResumeEndless} activeOpacity={0.86} style={styles.continueChip}>
+            <Text style={styles.continueText}>Resume endless · Wave {endlessWave}</Text>
+          </TouchableOpacity>
+        )}
+
         <View style={styles.menuButtonsContainer}>
           <CapsuleButton label="Play" onPress={onOpenLevels} />
           <CapsuleButton
-            label="Endless"
-            sublabel="Waves keep coming"
+            label={hasEndlessSave ? 'New endless run' : 'Endless'}
+            sublabel={hasEndlessSave ? 'Start over' : 'Waves keep coming'}
             onPress={onStartEndless}
             variant="glass"
           />
@@ -259,17 +270,6 @@ const styles = StyleSheet.create({
   ambientLayer: {
     ...StyleSheet.absoluteFillObject,
     overflow: 'hidden',
-  },
-  labShelf: {
-    position: 'absolute',
-    left: '10%',
-    right: '10%',
-    bottom: '16%',
-    height: platformSelect({ web: 120, default: 88 }),
-    borderRadius: theme.borderRadius.xl,
-    backgroundColor: 'rgba(247,251,248,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
   },
   bubbleOne: {
     position: 'absolute',
@@ -434,7 +434,7 @@ const styles = StyleSheet.create({
   },
   tutorialStrip: {
     width: '100%',
-    maxWidth: 480,
+    maxWidth: 320,
     marginTop: responsiveSpacing(28),
     padding: responsiveSpacing(14),
     borderRadius: theme.borderRadius.lg,

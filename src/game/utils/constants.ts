@@ -10,35 +10,47 @@ export const CELL_SIZE = theme.dimensions.cellSize;
 //
 // fallSpeed: ms per row while drifting down
 // spawnCooldownMs: minimum gap between two capsules entering
+// baseConcurrent: capsules kept airborne together from the start of a run
 // maxConcurrent: cap on simultaneous capsules for this difficulty
 // concurrencyThresholds: capsulesPlaced counts at which one more
-//   simultaneous capsule starts appearing (ramps 1 -> maxConcurrent)
+//   simultaneous capsule starts appearing (ramps baseConcurrent -> max)
 export const DIFFICULTY_SETTINGS = {
   LOW: {
-    fallSpeed: 1100,
-    spawnCooldownMs: 900,
+    fallSpeed: 1450,
+    spawnCooldownMs: 1000,
+    baseConcurrent: 1,
     maxConcurrent: 2,
-    concurrencyThresholds: [15],
+    concurrencyThresholds: [18],
   },
   MEDIUM: {
-    fallSpeed: 950,
-    spawnCooldownMs: 600,
+    fallSpeed: 1150,
+    spawnCooldownMs: 760,
+    baseConcurrent: 2,
     maxConcurrent: 3,
-    concurrencyThresholds: [8, 20],
+    concurrencyThresholds: [16],
   },
   HIGH: {
-    fallSpeed: 850,
-    spawnCooldownMs: 450,
+    fallSpeed: 950,
+    spawnCooldownMs: 560,
+    baseConcurrent: 2,
     maxConcurrent: 4,
-    concurrencyThresholds: [5, 12, 24],
+    concurrencyThresholds: [8, 20],
   },
 };
 
 export const FAST_FALL_SPEED = 50; // Fast drop speed
+// Loose halves left after a clear drop quicker than a capsule so chains settle
+// briskly, but stay slow enough that the player can still grab and steer them
+// into combos (a Germ Buster hallmark).
+export const DEBRIS_FALL_SPEED = 280;
+
+// Endless mode: after the last germ is cleared, the leftover capsules wipe
+// off the tray and there's a short beat before the next germs appear
+export const WAVE_CLEAR_DELAY_MS = 520;
 
 // Germ Buster (Virus Buster) style continuous spawning:
 // a new capsule enters while others are still falling
-export const SPAWN_GAP_ROWS = 4; // newest capsule must fall this far before the next enters
+export const SPAWN_GAP_ROWS = 3; // newest capsule must fall this far before the next enters
 export const MAX_CONCURRENT_PILLS = 4;
 // A piece released while resting on support locks after the remaining
 // (1 - GROUNDED_RELEASE_LOCK) fraction of a fall interval

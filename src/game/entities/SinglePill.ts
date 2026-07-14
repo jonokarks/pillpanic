@@ -11,6 +11,7 @@ export class SinglePill implements Controllable {
   fallOffset: number;
   held: boolean;
   fastDrop: boolean;
+  debris: boolean;
   dragOffsetX: number;
   dragOffsetY: number;
 
@@ -23,6 +24,7 @@ export class SinglePill implements Controllable {
     this.fallOffset = 0;
     this.held = false;
     this.fastDrop = false;
+    this.debris = false;
     this.dragOffsetX = 0;
     this.dragOffsetY = 0;
   }

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, Platform, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, Platform, useWindowDimensions, AppState } from 'react-native';
 
 const isWeb = Platform.OS === 'web';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -15,7 +15,7 @@ import { GameEngine } from '../game/GameEngine';
 import { GameBoard } from '../components/GameBoard';
 import { GameControls } from '../components/GameControls';
 import { GameState, COLOR_VALUES } from '../game/utils/constants';
-import { GameStats, SpeedSetting, GameMode, GameFeedbackEvent } from '../game/utils/types';
+import { GameStats, SpeedSetting, GameMode, GameFeedbackEvent, EndlessSnapshot } from '../game/utils/types';
 import { GameOverScreen } from './GameOverScreen';
 import { theme, responsiveFontSize, responsiveSpacing } from '../utils/theme';
 
@@ -23,8 +23,12 @@ interface GameScreenProps {
   level: number;
   speedSetting: SpeedSetting;
   gameMode: GameMode;
+  // When resuming an Endless run, the snapshot to restore (else null = fresh)
+  endlessSnapshot?: EndlessSnapshot | null;
   onBackToMenu: () => void;
   onGameComplete: (level: number, totalScore: number) => void;
+  onEndlessCheckpoint?: (snapshot: EndlessSnapshot) => void;
+  onEndlessEnded?: () => void;
   savedTotalScore: number;
   reducedMotion: boolean;
 }
@@ -35,8 +39,11 @@ export const GameScreen: React.FC<GameScreenProps> = ({
   level,
   speedSetting,
   gameMode,
+  endlessSnapshot,
   onBackToMenu,
   onGameComplete,
+  onEndlessCheckpoint,
+  onEndlessEnded,
   savedTotalScore,
   reducedMotion,
 }) => {
@@ -63,6 +70,9 @@ export const GameScreen: React.FC<GameScreenProps> = ({
     speedSetting: speedSetting,
   });
   const [feedback, setFeedback] = useState<{ title: string; detail: string } | null>(null);
+  // Measured px box available for the board, so it fits exactly between the
+  // header and the bottom safe area instead of overflowing into them
+  const [boardBox, setBoardBox] = useState<{ w: number; h: number } | null>(null);
 
   const headerOpacity = useSharedValue(0);
   const scoreScale = useSharedValue(1);
@@ -115,7 +125,36 @@ export const GameScreen: React.FC<GameScreenProps> = ({
     } else if (event.type === 'wave') {
       setFeedback({ title: 'Fresh wave', detail: `Tray ${event.level}` });
       feedbackProgress.value = withSequence(withTiming(1, { duration: reducedMotion ? 1 : 180 }), withTiming(0, { duration: reducedMotion ? 500 : 900 }));
+      // Checkpoint the Endless run at the start of every new wave
+      saveEndlessCheckpoint();
     }
+  };
+
+  // The snapshot to resume from is fixed for this mount
+  const initialSnapshotRef = useRef(endlessSnapshot);
+  // Latest persistence callbacks, read through refs so the engine's captured
+  // handlers never call a stale version
+  const checkpointRef = useRef(onEndlessCheckpoint);
+  const endedRef = useRef(onEndlessEnded);
+  useEffect(() => {
+    checkpointRef.current = onEndlessCheckpoint;
+    endedRef.current = onEndlessEnded;
+  });
+
+  // Persist the Endless run if it's still live (never resurrect a dead run)
+  const saveEndlessCheckpoint = () => {
+    if (gameMode !== GameMode.ENDLESS || !checkpointRef.current) return;
+    const engine = gameEngineRef.current!;
+    const state = engine.getGameState();
+    if (state === GameState.PLAYING || state === GameState.PAUSED) {
+      checkpointRef.current(engine.serializeEndless());
+    }
+  };
+
+  // Save on exit; a no-op for Classic
+  const handleExitToMenu = () => {
+    saveEndlessCheckpoint();
+    onBackToMenu();
   };
 
   useEffect(() => {
@@ -129,7 +168,11 @@ export const GameScreen: React.FC<GameScreenProps> = ({
       onFeedback: handleFeedback,
     });
 
-    engine.startGame(level, speedSetting, savedTotalScore, gameMode);
+    if (gameMode === GameMode.ENDLESS && initialSnapshotRef.current) {
+      engine.loadEndless(initialSnapshotRef.current);
+    } else {
+      engine.startGame(level, speedSetting, savedTotalScore, gameMode);
+    }
     
     // Game loop
     const gameLoop = (timestamp: number) => {
@@ -152,6 +195,23 @@ export const GameScreen: React.FC<GameScreenProps> = ({
       }
     };
   }, [level, speedSetting, gameMode]);
+
+  // A finished Endless run can't be resumed: drop its save on game over
+  useEffect(() => {
+    if (gameMode === GameMode.ENDLESS && gameState === GameState.GAME_OVER) {
+      endedRef.current?.();
+    }
+  }, [gameState, gameMode]);
+
+  // Checkpoint when the app is sent to the background (task switch, lock)
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'background' || next === 'inactive') {
+        saveEndlessCheckpoint();
+      }
+    });
+    return () => sub.remove();
+  }, [gameMode]);
 
   const handlePause = () => {
     const engine = gameEngineRef.current!;
@@ -260,7 +320,17 @@ export const GameScreen: React.FC<GameScreenProps> = ({
             </View>
           </Animated.View>
           
-          <View style={[styles.gameArea, showSidePanels && styles.gameAreaWide]}>
+          <View
+            style={[styles.gameArea, showSidePanels && styles.gameAreaWide]}
+            onLayout={(e) => {
+              const { width, height } = e.nativeEvent.layout;
+              setBoardBox(prev =>
+                prev && Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1
+                  ? prev
+                  : { w: width, h: height }
+              );
+            }}
+          >
             {/* Left side panel for desktop */}
             {showSidePanels && (
               <View style={styles.leftPanel}>
@@ -292,7 +362,12 @@ export const GameScreen: React.FC<GameScreenProps> = ({
 
             {/* Main game board */}
             <Animated.View style={[styles.boardContainer, boardPulseStyle]}>
-              <GameBoard gameEngine={gameEngineRef.current!} reducedMotion={reducedMotion} />
+              <GameBoard
+                gameEngine={gameEngineRef.current!}
+                reducedMotion={reducedMotion}
+                availableWidth={boardBox?.w}
+                availableHeight={boardBox?.h}
+              />
 
               {feedback && gameState === GameState.PLAYING && (
                 <Animated.View pointerEvents="none" style={[styles.feedbackToast, feedbackStyle]} accessibilityLiveRegion="polite">
@@ -317,7 +392,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({
                         <TouchableOpacity accessibilityRole="button" accessibilityLabel="Restart game" onPress={handleRestart} activeOpacity={0.84} style={styles.pauseSecondary}>
                           <Text style={styles.pauseSecondaryText}>Restart</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Return to menu" onPress={onBackToMenu} activeOpacity={0.84} style={styles.pauseSecondary}>
+                        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Return to menu" onPress={handleExitToMenu} activeOpacity={0.84} style={styles.pauseSecondary}>
                           <Text style={styles.pauseSecondaryText}>Menu</Text>
                         </TouchableOpacity>
                       </View>
@@ -362,8 +437,8 @@ const styles = StyleSheet.create({
     gap: responsiveSpacing(10),
   },
   levelChip: {
-    minWidth: responsiveSpacing(82),
-    minHeight: 52,
+    minWidth: responsiveSpacing(84),
+    height: 56,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.surfaceGlass,
@@ -374,7 +449,7 @@ const styles = StyleSheet.create({
   },
   scoreCapsule: {
     flex: 1,
-    minHeight: 58,
+    height: 56,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: theme.borderRadius.round,
@@ -401,8 +476,8 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   pauseButton: {
-    width: 52,
-    height: 52,
+    width: 56,
+    height: 56,
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
@@ -424,10 +499,11 @@ const styles = StyleSheet.create({
     gap: responsiveSpacing(10),
   },
   virusCounter: {
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
     gap: responsiveSpacing(8),
-    paddingHorizontal: responsiveSpacing(12),
+    paddingHorizontal: responsiveSpacing(14),
     paddingVertical: responsiveSpacing(8),
     borderRadius: theme.borderRadius.round,
     backgroundColor: 'rgba(255,255,255,0.07)',
@@ -448,11 +524,11 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   nextWell: {
-    minHeight: 42,
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
     gap: responsiveSpacing(9),
-    paddingHorizontal: responsiveSpacing(12),
+    paddingHorizontal: responsiveSpacing(14),
     paddingVertical: responsiveSpacing(8),
     borderRadius: theme.borderRadius.round,
     backgroundColor: theme.colors.surfaceGlass,

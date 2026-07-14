@@ -7,16 +7,19 @@ import {
   Direction,
   DIFFICULTY_SETTINGS,
   FAST_FALL_SPEED,
+  DEBRIS_FALL_SPEED,
+  WAVE_CLEAR_DELAY_MS,
   Color,
   CellType,
   getVirusCount,
   BOARD_WIDTH,
   BOARD_HEIGHT,
   SPAWN_GAP_ROWS,
+  MAX_CONCURRENT_PILLS,
   GROUNDED_RELEASE_LOCK,
   SPAWN_X,
 } from './utils/constants';
-import { GameStats, Virus, Controllable, SpeedSetting, GameMode, Position, GameFeedbackEvent } from './utils/types';
+import { GameStats, Virus, Controllable, SpeedSetting, GameMode, Position, GameFeedbackEvent, EndlessSnapshot } from './utils/types';
 import { SoundManager } from '../utils/SoundManager';
 
 // Germ Buster (Virus Buster) style engine:
@@ -50,6 +53,8 @@ export class GameEngine {
   private spawnCooldown: number = 0;
   private combo: number = 0;
   private grabStart: Position | null = null;
+  // Countdown between an Endless wave clearing and the next germs appearing
+  private waveDelay: number = 0;
   private onStateChange?: (state: GameState) => void;
   private onStatsChange?: (stats: GameStats) => void;
   private onBoardChange?: () => void;
@@ -103,10 +108,10 @@ export class GameEngine {
     this.grabStart = null;
     this.combo = 0;
     this.nextPill = Pill.generateRandomPill();
-    // Virus Buster style: the fall speed is fixed per difficulty; challenge
-    // scales through capsule count and spawn pacing instead
+    // Virus Buster style: fall speed is gentle per difficulty and, in
+    // Endless, ratchets up wave by wave along with the capsule count
     this.difficulty = DIFFICULTY_SETTINGS[speedSetting];
-    this.currentFallSpeed = this.difficulty.fallSpeed;
+    this.currentFallSpeed = this.effectiveFallSpeed();
     this.spawnCooldown = 0;
     this.accumulator = 0;
     this.changeState(GameState.PLAYING);
@@ -199,6 +204,18 @@ export class GameEngine {
     if (this.gameState !== GameState.PLAYING) return;
 
     deltaTime = Math.min(deltaTime, 100);
+
+    // During an Endless wave change the tray sits cleared (old capsules gone)
+    // for a short beat before the next germs drop in
+    if (this.waveDelay > 0) {
+      this.waveDelay -= deltaTime;
+      if (this.waveDelay <= 0) {
+        this.waveDelay = 0;
+        this.spawnNextWaveGerms();
+      }
+      return;
+    }
+
     this.accumulator += deltaTime;
 
     while (this.accumulator >= this.FIXED_TIMESTEP) {
@@ -255,9 +272,13 @@ export class GameEngine {
 
     for (const pill of order) {
       if (!pill || !pill.isActive) continue;
-      if (pill.held) continue;
+      // Held pieces keep falling (they're only steered, never frozen)
 
-      const rate = pill.fastDrop ? FAST_FALL_SPEED : this.currentFallSpeed;
+      const rate = pill.fastDrop
+        ? FAST_FALL_SPEED
+        : pill.debris
+          ? DEBRIS_FALL_SPEED
+          : this.currentFallSpeed;
       pill.fallOffset += timestep / rate;
 
       while (pill.fallOffset >= 1) {
@@ -291,12 +312,35 @@ export class GameEngine {
 
   // --- Continuous Germ Buster spawning ---
 
+  // How far the run has escalated. In Endless each cleared wave cranks the
+  // pressure up; Classic levels are self-contained so there's no carry-over.
+  private waveIndex(): number {
+    return this.gameMode === GameMode.ENDLESS ? Math.max(0, this.stats.level - 1) : 0;
+  }
+
+  // Capsules drift a little faster each Endless wave (never below a floor)
+  private effectiveFallSpeed(): number {
+    const scaled = this.difficulty.fallSpeed * Math.pow(0.96, this.waveIndex());
+    return Math.max(430, Math.floor(scaled));
+  }
+
+  // New capsules enter more often each Endless wave
+  private effectiveSpawnCooldown(): number {
+    const scaled = this.difficulty.spawnCooldownMs * Math.pow(0.95, this.waveIndex());
+    return Math.max(330, Math.floor(scaled));
+  }
+
   private maxConcurrentCapsules(): number {
-    let max = 1;
+    // Several capsules share the sky from the outset (Germ Buster style),
+    // then more are added as the run progresses
+    let max = this.difficulty.baseConcurrent;
     for (const threshold of this.difficulty.concurrencyThresholds) {
       if (this.stats.capsulesPlaced >= threshold) max++;
     }
-    return Math.min(max, this.difficulty.maxConcurrent);
+    // Endless keeps adding capsules to the sky as waves stack up, toward the
+    // Virus Buster ceiling of four in the air at once
+    max += Math.floor(this.waveIndex() / 3);
+    return Math.min(max, MAX_CONCURRENT_PILLS);
   }
 
   private maybeSpawnPill(timestep: number): void {
@@ -362,14 +406,16 @@ export class GameEngine {
     pill.position = { x: spawnX, y: 0 };
     this.fallingPills.push(pill);
     this.nextPill = Pill.generateRandomPill();
-    this.spawnCooldown = this.difficulty.spawnCooldownMs;
+    this.spawnCooldown = this.effectiveSpawnCooldown();
     this.notifyStatsChange();
     this.notifyBoardChange();
   }
 
   // --- Touch controls: grab / drag / release / tap-rotate ---
 
-  // Grab the piece under the finger; it stops falling while held
+  // Grab the piece under the finger. As in Germ Buster the capsule KEEPS
+  // FALLING while held — the finger steers it left/right and can pull it down
+  // faster, but it can never be frozen in mid-air.
   grabPill(pillId: string): boolean {
     if (this.gameState !== GameState.PLAYING) return false;
     const pill = this.fallingPills.find(p => p.id === pillId && p.isActive);
@@ -377,27 +423,25 @@ export class GameEngine {
 
     this.selectedPill = pill;
     pill.held = true;
-    // Fold current sub-cell progress into the drag offset so the piece
-    // doesn't visually snap when grabbed
-    this.grabStart = { x: pill.position.x, y: pill.position.y + pill.fallOffset };
+    // Anchor the finger to the capsule's current cell; gravity keeps running
+    // via fallOffset, so there's no need to fold or reset it here
+    this.grabStart = { x: pill.position.x, y: pill.position.y };
     pill.dragOffsetX = 0;
-    pill.dragOffsetY = pill.fallOffset;
-    pill.fallOffset = 0;
+    pill.dragOffsetY = 0;
     this.notifyBoardChange();
     return true;
   }
 
-  // Move the held piece toward the finger. Translation is cumulative since
-  // the grab, in cell units. Movement is committed cell-by-cell with
-  // collision checks; the fractional remainder is a visual lean only.
-  // Pieces can move sideways and down, never up (as in Germ Buster).
+  // Steer the held piece toward the finger. Horizontal movement is committed
+  // cell-by-cell (with a fractional lean for smoothness); vertical descent is
+  // still governed by gravity, but pulling the finger below the capsule makes
+  // it drop faster. The piece never moves up and never stops falling.
   dragHeldPill(translationX: number, translationY: number): void {
     const pill = this.selectedPill;
     if (!pill || !pill.held || !pill.isActive || !this.grabStart) return;
     if (this.gameState !== GameState.PLAYING) return;
 
     const targetX = this.grabStart.x + translationX;
-    const targetY = this.grabStart.y + translationY;
 
     let guard = BOARD_WIDTH;
     while (guard-- > 0 && Math.round(targetX) > pill.position.x && this.canPieceMove(pill, 1, 0)) {
@@ -407,44 +451,30 @@ export class GameEngine {
     while (guard-- > 0 && Math.round(targetX) < pill.position.x && this.canPieceMove(pill, -1, 0)) {
       pill.move(-1, 0);
     }
-    guard = BOARD_HEIGHT;
-    while (guard-- > 0 && Math.floor(targetY) > pill.position.y && this.canPieceMove(pill, 0, 1)) {
-      pill.move(0, 1);
-    }
 
-    // Visual lean toward the finger, clamped so the piece never appears
-    // inside a wall or below its support
+    // Horizontal lean toward the finger, clamped to avoid clipping walls
     const fracX = targetX - pill.position.x;
     const maxLeanRight = this.canPieceMove(pill, 1, 0) ? 0.45 : 0.05;
     const maxLeanLeft = this.canPieceMove(pill, -1, 0) ? -0.45 : -0.05;
     pill.dragOffsetX = Math.max(maxLeanLeft, Math.min(maxLeanRight, fracX));
 
-    const fracY = targetY - pill.position.y;
-    const maxLeanDown = this.canPieceMove(pill, 0, 1) ? 0.9 : 0.05;
-    pill.dragOffsetY = Math.max(-0.15, Math.min(maxLeanDown, fracY));
+    // Finger held below the capsule -> soft-drop faster; otherwise it keeps
+    // drifting down under normal gravity
+    const targetY = this.grabStart.y + translationY;
+    pill.fastDrop = targetY > pill.position.y + 0.75;
 
     this.notifyBoardChange();
   }
 
-  // Finger lifted: the piece resumes falling from where it was left
+  // Finger lifted: the piece simply keeps falling from where it is
   releaseHeldPill(): void {
     const pill = this.selectedPill;
     if (!pill || !pill.held) return;
 
     pill.held = false;
-    if (!pill.canMove(this.board, 0, 1)) {
-      // Resting on settled pieces: start the lock timer partway through so
-      // the piece settles quickly after release
-      pill.fallOffset = GROUNDED_RELEASE_LOCK;
-    } else if (this.entityBlocked(pill, 0, 1)) {
-      // Resting on another falling piece: wait for it to move
-      pill.fallOffset = 0;
-    } else {
-      pill.fallOffset = Math.max(0, Math.min(0.99, pill.dragOffsetY));
-    }
+    pill.fastDrop = false;
     pill.dragOffsetX = 0;
     pill.dragOffsetY = 0;
-    pill.fastDrop = false;
     this.selectedPill = null;
     this.grabStart = null;
     this.notifyBoardChange();
@@ -474,6 +504,55 @@ export class GameEngine {
       return this.rotatePillById(pill.id);
     }
     return false;
+  }
+
+  // --- Forgiving finger control: act on the nearest piece to a touch ---
+
+  // Closest active, user-controllable falling piece to a fractional board
+  // cell, or null if nothing is within `maxDist` cells. Uses each piece's
+  // smooth visual position so the target matches what the player sees.
+  private findNearestControllable(
+    cellX: number,
+    cellY: number,
+    maxDist: number
+  ): Controllable | null {
+    let best: Controllable | null = null;
+    let bestDistSq = Infinity;
+
+    for (const pill of this.fallingPills) {
+      if (!pill.isActive || !pill.isUserControllable) continue;
+      for (const pos of pill.getPositions()) {
+        const visualX = pos.x + pill.dragOffsetX;
+        const visualY = pos.y + Math.min(pill.fallOffset, 0.99);
+        const dx = visualX + 0.5 - cellX;
+        const dy = visualY + 0.5 - cellY;
+        const distSq = dx * dx + dy * dy;
+        if (distSq < bestDistSq) {
+          bestDistSq = distSq;
+          best = pill;
+        }
+      }
+    }
+
+    if (!best || bestDistSq > maxDist * maxDist) return null;
+    return best;
+  }
+
+  // Grab the nearest piece to a touch; returns its id (for the renderer to
+  // drive per-piece feedback) or null if nothing was close enough
+  grabNearestPill(cellX: number, cellY: number, maxDist: number = 2.4): string | null {
+    if (this.gameState !== GameState.PLAYING) return null;
+    const pill = this.findNearestControllable(cellX, cellY, maxDist);
+    if (!pill) return null;
+    return this.grabPill(pill.id) ? pill.id : null;
+  }
+
+  // Rotate the nearest piece to a tap; returns its id on success
+  rotateNearestPill(cellX: number, cellY: number, maxDist: number = 2.4): string | null {
+    if (this.gameState !== GameState.PLAYING) return null;
+    const pill = this.findNearestControllable(cellX, cellY, maxDist);
+    if (!pill) return null;
+    return this.rotatePillById(pill.id) ? pill.id : null;
   }
 
   // --- Keyboard controls (web) ---
@@ -609,11 +688,13 @@ export class GameEngine {
 
       // Rare multi-cell splits reported by the matching system
       splits.forEach(split => {
-        this.fallingPills.push(new SinglePill(split.color, split.position, true));
+        const piece = new SinglePill(split.color, split.position, true);
+        piece.debris = true;
+        this.fallingPills.push(piece);
       });
 
-      // Germ Buster signature: unsupported pieces start falling slowly and
-      // can be grabbed and steered by the player
+      // Germ Buster signature: unsupported pieces break loose and plummet
+      // fast to settle the stack (still grabbable on the way down)
       this.releaseFloatingPieces();
 
       this.notifyBoardChange();
@@ -652,10 +733,14 @@ export class GameEngine {
         });
 
         if (cells.length === 2) {
-          this.fallingPills.push(Pill.fromBoardCells(cells, pillId));
+          const piece = Pill.fromBoardCells(cells, pillId);
+          piece.debris = true;
+          this.fallingPills.push(piece);
         } else {
           cells.forEach(({ position, color }) => {
-            this.fallingPills.push(new SinglePill(color, position, true));
+            const piece = new SinglePill(color, position, true);
+            piece.debris = true;
+            this.fallingPills.push(piece);
           });
         }
         releasedAny = true;
@@ -697,12 +782,44 @@ export class GameEngine {
   private startNextWave(): void {
     this.stats.score += 1000 * this.stats.level;
     this.stats.level++;
+    // Wipe the tray clean: the capsules you used clear off before the next
+    // germs arrive (rather than the new germs landing among old halves)
+    this.clearPlayfield();
+    this.currentFallSpeed = this.effectiveFallSpeed();
+    this.soundManager.playLevelComplete();
+    this.notifyStatsChange();
+    this.notifyBoardChange();
+    // Hold the cleared tray for a beat, then drop in the new germs
+    this.waveDelay = WAVE_CLEAR_DELAY_MS;
+  }
+
+  // Remove every capsule — settled halves and anything still airborne — so
+  // the next wave starts on a clean tray (germs remain since they're cleared)
+  private clearPlayfield(): void {
+    for (let y = 0; y < BOARD_HEIGHT; y++) {
+      for (let x = 0; x < BOARD_WIDTH; x++) {
+        const cell = this.board.getCell(x, y);
+        if (cell && cell.type === CellType.PILL) {
+          this.board.setCell(x, y, { type: CellType.EMPTY, color: null });
+        }
+      }
+    }
+    this.fallingPills = [];
+    this.selectedPill = null;
+    this.grabStart = null;
+    this.combo = 0;
+  }
+
+  // The second half of an Endless wave change: germs appear and play resumes
+  private spawnNextWaveGerms(): void {
     this.generateViruses(this.stats.level);
     this.stats.virusCount = this.board.countViruses();
-    this.soundManager.playLevelComplete();
+    if (!this.nextPill) this.nextPill = Pill.generateRandomPill();
+    this.spawnCooldown = 0;
     this.onFeedback?.({ type: 'wave', level: this.stats.level });
     this.notifyStatsChange();
     this.notifyBoardChange();
+    this.trySpawnPill();
   }
 
   private gameOver(): void {
@@ -746,6 +863,68 @@ export class GameEngine {
     if (this.onBoardChange) {
       this.onBoardChange();
     }
+  }
+
+  // --- Endless save / resume ---
+
+  // Snapshot the resumable state of an Endless run. Only settled cells are
+  // stored; airborne capsules are dropped (they respawn on load).
+  serializeEndless(): EndlessSnapshot {
+    const cells: EndlessSnapshot['cells'] = [];
+    for (let y = 0; y < BOARD_HEIGHT; y++) {
+      for (let x = 0; x < BOARD_WIDTH; x++) {
+        const cell = this.board.getCell(x, y);
+        if (cell && cell.type !== CellType.EMPTY && cell.color) {
+          cells.push({ x, y, type: cell.type, color: cell.color, pillId: cell.pillId });
+        }
+      }
+    }
+    const nextColors = this.nextPill
+      ? ([...this.nextPill.colors] as [Color, Color])
+      : ([Color.RED, Color.BLUE] as [Color, Color]);
+
+    return {
+      version: 1,
+      cells,
+      score: this.stats.score,
+      wave: this.stats.level,
+      capsulesPlaced: this.stats.capsulesPlaced,
+      speedSetting: this.stats.speedSetting,
+      nextColors,
+      lastPlayed: '',
+    };
+  }
+
+  // Restore an Endless run from a snapshot and resume play immediately.
+  loadEndless(snapshot: EndlessSnapshot): void {
+    this.stats = {
+      score: snapshot.score,
+      level: snapshot.wave,
+      virusCount: 0,
+      linesCleared: 0,
+      capsulesPlaced: snapshot.capsulesPlaced,
+      currentSpeedLevel: 0,
+      speedSetting: snapshot.speedSetting,
+    };
+    this.gameMode = GameMode.ENDLESS;
+    this.board.clear();
+    for (const c of snapshot.cells) {
+      this.board.setCell(c.x, c.y, { type: c.type, color: c.color, pillId: c.pillId });
+    }
+    this.stats.virusCount = this.board.countViruses();
+    this.fallingPills = [];
+    this.selectedPill = null;
+    this.grabStart = null;
+    this.combo = 0;
+    this.nextPill = new Pill([snapshot.nextColors[0], snapshot.nextColors[1]]);
+    this.difficulty = DIFFICULTY_SETTINGS[snapshot.speedSetting];
+    this.currentFallSpeed = this.effectiveFallSpeed();
+    this.spawnCooldown = 0;
+    this.accumulator = 0;
+    this.changeState(GameState.PLAYING);
+    this.trySpawnPill();
+    this.notifyStatsChange();
+    this.notifyBoardChange();
   }
 
   getBoard(): Board {

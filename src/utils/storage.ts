@@ -1,8 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SpeedSetting, SavedGameState } from '../game/utils/types';
+import { SpeedSetting, SavedGameState, EndlessSnapshot } from '../game/utils/types';
 
 const STORAGE_KEYS = {
   GAME_STATE: '@PillPanic:gameState',
+  ENDLESS_STATE: '@PillPanic:endlessState',
   SETTINGS: '@PillPanic:settings',
   HIGH_SCORES: '@PillPanic:highScores',
   TUTORIAL_SEEN: '@PillPanic:tutorialSeen',
@@ -36,6 +37,40 @@ export const Storage = {
     } catch (error) {
       console.error('Failed to load game progress:', error);
       return null;
+    }
+  },
+
+  // Save an in-progress Endless run
+  async saveEndlessGame(snapshot: EndlessSnapshot): Promise<void> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.ENDLESS_STATE, JSON.stringify(snapshot));
+    } catch (error) {
+      console.error('Failed to save endless game:', error);
+    }
+  },
+
+  // Load a saved Endless run, if any
+  async loadEndlessGame(): Promise<EndlessSnapshot | null> {
+    try {
+      const saved = await AsyncStorage.getItem(STORAGE_KEYS.ENDLESS_STATE);
+      if (!saved) return null;
+      const parsed = JSON.parse(saved) as EndlessSnapshot;
+      // Guard against corrupt or empty snapshots
+      if (!parsed || !Array.isArray(parsed.cells) || typeof parsed.wave !== 'number') {
+        return null;
+      }
+      return parsed;
+    } catch (error) {
+      console.error('Failed to load endless game:', error);
+      return null;
+    }
+  },
+
+  async clearEndlessGame(): Promise<void> {
+    try {
+      await AsyncStorage.removeItem(STORAGE_KEYS.ENDLESS_STATE);
+    } catch (error) {
+      console.error('Failed to clear endless game:', error);
     }
   },
 
@@ -101,6 +136,7 @@ export const Storage = {
     try {
       await AsyncStorage.multiRemove([
         STORAGE_KEYS.GAME_STATE,
+        STORAGE_KEYS.ENDLESS_STATE,
         STORAGE_KEYS.SETTINGS,
         STORAGE_KEYS.HIGH_SCORES,
         STORAGE_KEYS.TUTORIAL_SEEN,

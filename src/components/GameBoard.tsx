@@ -1,13 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, Platform, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
+  withSequence,
   runOnJS,
 } from 'react-native-reanimated';
 import { PanGestureHandler, TapGestureHandler, State } from 'react-native-gesture-handler';
+import * as Haptics from 'expo-haptics';
 import { Board } from '../game/entities/Board';
 import { Controllable } from '../game/utils/types';
 import { GameEngine } from '../game/GameEngine';
@@ -23,9 +25,17 @@ import { theme } from '../utils/theme';
 
 const isWeb = Platform.OS === 'web';
 
-// Generous touch slop so a fingertip can grab a moving piece without needing
-// pixel accuracy (the original used a stylus; fingers need a bigger target)
-const TOUCH_SLOP = { top: 24, bottom: 24, left: 24, right: 24 };
+// A drag must travel this far before it counts as a move rather than a tap.
+// Kept comfortably above the tap radius so a wobbly finger tap rotates
+// instead of accidentally sliding the capsule a column.
+const DRAG_ACTIVATE_DIST = 14;
+const TAP_MAX_DIST = 11;
+
+// Fire-and-forget haptics; a no-op on web and if the device has none
+const tick = (style?: Haptics.ImpactFeedbackStyle) => {
+  if (isWeb) return;
+  (style ? Haptics.impactAsync(style) : Haptics.selectionAsync()).catch(() => {});
+};
 
 // Board metrics derived from the live window size, so the game fits phones,
 // tablets, and desktop windows, and adapts to rotation/resizes
@@ -36,22 +46,25 @@ export interface BoardLayout {
   boardPadding: number;
 }
 
-const computeLayout = (width: number, height: number): BoardLayout => {
+// Non-grid space the board renders around the cells: the wrapper's padding,
+// background padding, and borders. Subtracted from the available box so the
+// whole board (not just the grid) fits inside its container.
+const BOARD_CHROME = isWeb ? 40 : 30;
+
+// Size the grid to fit exactly inside a given available box (width x height,
+// in px). This is the reliable path: the box is measured from the real
+// on-screen container, so the board never overlaps the header or the
+// safe-area insets regardless of device.
+const computeLayoutForBox = (availW: number, availH: number): BoardLayout => {
   const cellMargin = isWeb ? 1.5 : 1;
   const boardPadding = isWeb ? 6 : 4;
-  // Vertical space consumed by everything that isn't the grid (header, safe
-  // areas, board chrome). Kept generous so the board never overflows.
-  const reservedVertical = isWeb ? 230 : 200;
-  const reservedHorizontal = isWeb ? 90 : 32;
 
-  const pitchFromHeight =
-    (height - reservedVertical - boardPadding * 2) / BOARD_HEIGHT;
-  const pitchFromWidth =
-    (width - reservedHorizontal - boardPadding * 2) / BOARD_WIDTH;
-  const pitch = Math.floor(Math.min(pitchFromHeight, pitchFromWidth));
+  const usableH = availH - BOARD_CHROME - boardPadding * 2;
+  const usableW = availW - BOARD_CHROME - boardPadding * 2;
+  const pitch = Math.floor(Math.min(usableH / BOARD_HEIGHT, usableW / BOARD_WIDTH));
 
   const maxCell = isWeb ? 48 : 44;
-  const cellSize = Math.max(16, Math.min(maxCell, pitch - cellMargin * 2));
+  const cellSize = Math.max(12, Math.min(maxCell, pitch - cellMargin * 2));
   return {
     cellSize,
     cellMargin,
@@ -60,9 +73,21 @@ const computeLayout = (width: number, height: number): BoardLayout => {
   };
 };
 
+// Fallback used before the container has been measured (and on web, where the
+// board is laid out against the window with fixed reserves for chrome/panels).
+const computeLayoutFromWindow = (width: number, height: number): BoardLayout => {
+  const reservedVertical = isWeb ? 230 : 260;
+  const reservedHorizontal = isWeb ? 90 : 24;
+  return computeLayoutForBox(width - reservedHorizontal, height - reservedVertical);
+};
+
 interface GameBoardProps {
   gameEngine: GameEngine;
   reducedMotion?: boolean;
+  // Measured px box the board must fit within (from the parent's onLayout).
+  // When omitted, falls back to a window-derived estimate.
+  availableWidth?: number;
+  availableHeight?: number;
 }
 
 const TokenContent = ({
@@ -152,18 +177,24 @@ const StaticGrid = React.memo<{ board: Board; version: number; layout: BoardLayo
 );
 
 // One falling piece (whole capsule or single half), absolutely positioned
-// over the grid. Follows the engine's smooth sub-cell position and carries
-// the Germ Buster gestures: drag to move, tap to rotate. Positioned with
-// transforms (GPU compositing) rather than left/top so per-frame movement
-// doesn't trigger native layout passes.
+// over the grid. Purely visual: grabbing, dragging and rotating are handled
+// by a single board-level gesture layer (see GameBoard) so a fingertip does
+// not have to land precisely on a moving capsule. Positioned with transforms
+// (GPU compositing) rather than left/top so per-frame movement doesn't
+// trigger native layout passes.
 const FallingPiece: React.FC<{
   pill: Controllable;
   board: Board;
-  gameEngine: GameEngine;
   isSelected: boolean;
   layout: BoardLayout;
-}> = ({ pill, board, gameEngine, isSelected, layout }) => {
+  reducedMotion: boolean;
+  // Increments each time this piece is rotated, to trigger the settle anim
+  rotatePulse: number;
+}> = ({ pill, board, isSelected, layout, reducedMotion, rotatePulse }) => {
   const scale = useSharedValue(1);
+  // Radians of leftover rotation that springs back to 0 so a rotate reads as
+  // the capsule turning into place rather than snapping
+  const settle = useSharedValue(0);
   const { cellSize, cellMargin, cellPitch, boardPadding } = layout;
 
   const positions = pill.getPositions();
@@ -174,46 +205,33 @@ const FallingPiece: React.FC<{
   // while held). A grounded piece shows no fall offset - its fallOffset is
   // acting as the lock timer.
   const visualX = originX + pill.dragOffsetX;
-  const visualY = pill.held
-    ? originY + pill.dragOffsetY
-    : originY + (pill.canMove(board, 0, 1) ? Math.min(pill.fallOffset, 0.99) : 0);
+  // Vertical position is always gravity-driven, held or not, so a gripped
+  // capsule visibly keeps descending while the finger steers it sideways
+  const visualY = originY + (pill.canMove(board, 0, 1) ? Math.min(pill.fallOffset, 0.99) : 0);
 
   const maxDX = Math.max(...positions.map(p => p.x - originX));
   const maxDY = Math.max(...positions.map(p => p.y - originY));
 
-  const grab = (id: string) => gameEngine.grabPill(id);
-  const drag = (tx: number, ty: number) => gameEngine.dragHeldPill(tx, ty);
-  const release = () => gameEngine.releaseHeldPill();
-  const rotate = (id: string) => gameEngine.rotatePillById(id);
+  // Lift the piece slightly while it's held by the finger
+  useEffect(() => {
+    scale.value = reducedMotion
+      ? (pill.held ? 1.06 : 1)
+      : withSpring(pill.held ? 1.08 : 1, { damping: 15, stiffness: 300 });
+  }, [pill.held, reducedMotion]);
 
-  const handlePan = (event: any) => {
-    'worklet';
-    const { state, translationX, translationY } = event.nativeEvent;
-
-    if (state === State.BEGAN) {
-      scale.value = withSpring(1.08, { damping: 15, stiffness: 300 });
-      runOnJS(grab)(pill.id);
-    } else if (state === State.ACTIVE) {
-      runOnJS(drag)(translationX / cellPitch, translationY / cellPitch);
-    } else if (
-      state === State.END ||
-      state === State.CANCELLED ||
-      state === State.FAILED
-    ) {
-      scale.value = withSpring(1, { damping: 15, stiffness: 300 });
-      runOnJS(release)();
-    }
-  };
-
-  const handleTap = (event: any) => {
-    'worklet';
-    if (event.nativeEvent.state === State.END) {
-      runOnJS(rotate)(pill.id);
-    }
-  };
+  // Play the rotate settle whenever this piece is rotated
+  useEffect(() => {
+    if (rotatePulse === 0 || reducedMotion) return;
+    settle.value = -0.34;
+    settle.value = withSpring(0, { damping: 12, stiffness: 240 });
+    scale.value = withSequence(
+      withSpring(1.12, { damping: 12, stiffness: 340 }),
+      withSpring(pill.held ? 1.08 : 1, { damping: 14, stiffness: 300 })
+    );
+  }, [rotatePulse]);
 
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
+    transform: [{ rotate: `${settle.value}rad` }, { scale: scale.value }],
   }));
 
   const colors: Color[] =
@@ -224,66 +242,69 @@ const FallingPiece: React.FC<{
   const isCapsule = colors.length === 2;
 
   return (
-    <TapGestureHandler maxDist={12} hitSlop={TOUCH_SLOP} onHandlerStateChange={handleTap}>
-      <Animated.View
-        style={[
-          styles.piece,
-          {
-            width: (maxDX + 1) * cellPitch,
-            height: (maxDY + 1) * cellPitch,
-            zIndex: pill.held ? 10 : 2,
-            transform: [
-              { translateX: boardPadding + visualX * cellPitch },
-              { translateY: boardPadding + visualY * cellPitch },
-            ],
-          },
-        ]}
-      >
-        <PanGestureHandler
-          minDist={4}
-          hitSlop={TOUCH_SLOP}
-          shouldCancelWhenOutside={false}
-          onGestureEvent={handlePan}
-          onHandlerStateChange={handlePan}
-        >
-          <Animated.View style={[styles.pieceInner, animatedStyle]}>
-            {positions.map((pos, index) => (
-              <View
-                key={index}
-                style={[
-                  styles.cell,
-                  styles.pieceCell,
-                  {
-                    width: cellSize,
-                    height: cellSize,
-                    left: (pos.x - originX) * cellPitch + cellMargin,
-                    top: (pos.y - originY) * cellPitch + cellMargin,
-                    borderColor: isSelected
-                      ? theme.colors.warning
-                      : isCapsule
-                        ? 'rgba(255,255,255,0.52)'
-                        : 'rgba(255,255,255,0.34)',
-                    borderRadius: isCapsule
-                      ? theme.borderRadius.md
-                      : theme.borderRadius.round,
-                  },
-                  isSelected && styles.activeCellShadow,
-                ]}
-              >
-                <TokenContent color={colors[index] ?? colors[0]} isVirus={false} cellSize={cellSize} />
-              </View>
-            ))}
-          </Animated.View>
-        </PanGestureHandler>
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.piece,
+        {
+          width: (maxDX + 1) * cellPitch,
+          height: (maxDY + 1) * cellPitch,
+          zIndex: pill.held ? 10 : 2,
+          transform: [
+            { translateX: boardPadding + visualX * cellPitch },
+            { translateY: boardPadding + visualY * cellPitch },
+          ],
+        },
+      ]}
+    >
+      <Animated.View style={[styles.pieceInner, animatedStyle]}>
+        {positions.map((pos, index) => (
+          <View
+            key={index}
+            style={[
+              styles.cell,
+              styles.pieceCell,
+              {
+                width: cellSize,
+                height: cellSize,
+                left: (pos.x - originX) * cellPitch + cellMargin,
+                top: (pos.y - originY) * cellPitch + cellMargin,
+                borderColor: isSelected
+                  ? theme.colors.warning
+                  : isCapsule
+                    ? 'rgba(255,255,255,0.52)'
+                    : 'rgba(255,255,255,0.34)',
+                borderRadius: isCapsule
+                  ? theme.borderRadius.md
+                  : theme.borderRadius.round,
+              },
+              isSelected && styles.activeCellShadow,
+            ]}
+          >
+            <TokenContent color={colors[index] ?? colors[0]} isVirus={false} cellSize={cellSize} />
+          </View>
+        ))}
       </Animated.View>
-    </TapGestureHandler>
+    </Animated.View>
   );
 };
 
-export const GameBoard: React.FC<GameBoardProps> = ({ gameEngine, reducedMotion = false }) => {
+export const GameBoard: React.FC<GameBoardProps> = ({
+  gameEngine,
+  reducedMotion = false,
+  availableWidth,
+  availableHeight,
+}) => {
   const boardScale = useSharedValue(0.95);
   const { width, height } = useWindowDimensions();
-  const layout = useMemo(() => computeLayout(width, height), [width, height]);
+  const layout = useMemo(() => {
+    // Prefer the measured container box on native; fall back to the window
+    // estimate on web or before the first measurement lands
+    if (!isWeb && availableWidth && availableHeight) {
+      return computeLayoutForBox(availableWidth, availableHeight);
+    }
+    return computeLayoutFromWindow(width, height);
+  }, [width, height, availableWidth, availableHeight]);
 
   // The board subscribes to engine ticks itself, so 60fps falling-piece
   // updates re-render only this subtree - not the header/stats above it
@@ -299,6 +320,68 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameEngine, reducedMotion 
   const boardAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: boardScale.value }],
   }));
+
+  // --- Board-level touch control (forgiving grab of the nearest piece) ---
+  const { cellPitch, boardPadding } = layout;
+  // Which piece the current drag grabbed, and its last column, for haptics
+  const grabbedIdRef = useRef<string | null>(null);
+  const lastColRef = useRef(0);
+  // Bumped per rotation so the matching piece plays its settle animation
+  const [rotated, setRotated] = useState<{ id: string; n: number } | null>(null);
+  const rotateNonce = useRef(0);
+
+  const pointToCellX = (x: number) => (x - boardPadding) / cellPitch;
+  const pointToCellY = (y: number) => (y - boardPadding) / cellPitch;
+
+  const onGrab = (x: number, y: number) => {
+    const id = gameEngine.grabNearestPill(pointToCellX(x), pointToCellY(y));
+    grabbedIdRef.current = id;
+    if (id) {
+      const p = gameEngine.getAllFallingPills().find(pp => pp.id === id);
+      lastColRef.current = p ? p.position.x : 0;
+      tick();
+    }
+  };
+  const onDrag = (tx: number, ty: number) => {
+    if (!grabbedIdRef.current) return;
+    gameEngine.dragHeldPill(tx / cellPitch, ty / cellPitch);
+    const p = gameEngine.getAllFallingPills().find(pp => pp.id === grabbedIdRef.current);
+    if (p && p.position.x !== lastColRef.current) {
+      lastColRef.current = p.position.x;
+      tick();
+    }
+  };
+  const onRelease = () => {
+    gameEngine.releaseHeldPill();
+    grabbedIdRef.current = null;
+  };
+  const onRotate = (x: number, y: number) => {
+    const id = gameEngine.rotateNearestPill(pointToCellX(x), pointToCellY(y));
+    if (!id) return;
+    tick(Haptics.ImpactFeedbackStyle.Light);
+    rotateNonce.current += 1;
+    setRotated({ id, n: rotateNonce.current });
+  };
+
+  const handlePan = (event: any) => {
+    'worklet';
+    const { state, x, y, translationX, translationY } = event.nativeEvent;
+    if (state === State.BEGAN) {
+      runOnJS(onGrab)(x, y);
+    } else if (state === State.ACTIVE) {
+      runOnJS(onDrag)(translationX, translationY);
+    } else if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
+      runOnJS(onRelease)();
+    }
+  };
+
+  const handleTap = (event: any) => {
+    'worklet';
+    const { state, x, y } = event.nativeEvent;
+    if (state === State.END) {
+      runOnJS(onRotate)(x, y);
+    }
+  };
 
   const board = gameEngine.getBoard();
   const fallingPills = gameEngine.getAllFallingPills();
@@ -321,12 +404,27 @@ export const GameBoard: React.FC<GameBoardProps> = ({ gameEngine, reducedMotion 
                     key={pill.id}
                     pill={pill}
                     board={board}
-                    gameEngine={gameEngine}
                     isSelected={pill === selectedPill}
                     layout={layout}
+                    reducedMotion={reducedMotion}
+                    rotatePulse={rotated?.id === pill.id ? rotated.n : 0}
                   />
                 ))}
             </View>
+            {/* Single gesture surface over the whole grid: tap rotates and
+                drag moves the nearest capsule, so aim need not be precise */}
+            <TapGestureHandler maxDist={TAP_MAX_DIST} maxDurationMs={320} onHandlerStateChange={handleTap}>
+              <Animated.View style={StyleSheet.absoluteFill}>
+                <PanGestureHandler
+                  minDist={DRAG_ACTIVATE_DIST}
+                  shouldCancelWhenOutside={false}
+                  onGestureEvent={handlePan}
+                  onHandlerStateChange={handlePan}
+                >
+                  <Animated.View style={StyleSheet.absoluteFill} />
+                </PanGestureHandler>
+              </Animated.View>
+            </TapGestureHandler>
           </View>
         </LinearGradient>
       </Animated.View>

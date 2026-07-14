@@ -23,6 +23,8 @@ export interface Controllable {
   // True while the player's finger is holding this piece (suspends gravity)
   held: boolean;
   fastDrop: boolean;
+  // Loose half/capsule left after a clear — drops fast to settle chains
+  debris: boolean;
   // Visual-only lean toward the finger while dragging, in cell fractions
   dragOffsetX: number;
   dragOffsetY: number;
@@ -89,5 +91,26 @@ export interface SavedGameState {
   currentLevel: number;
   totalScore: number;
   speedSetting: SpeedSetting;
+  lastPlayed: string;
+}
+
+// A resumable snapshot of an in-progress Endless run. Only occupied cells are
+// stored; in-flight falling capsules are dropped and respawn fresh on load.
+export interface EndlessCell {
+  x: number;
+  y: number;
+  type: CellType;
+  color: Color;
+  pillId?: string;
+}
+
+export interface EndlessSnapshot {
+  version: number;
+  cells: EndlessCell[];
+  score: number;
+  wave: number;
+  capsulesPlaced: number;
+  speedSetting: SpeedSetting;
+  nextColors: [Color, Color];
   lastPlayed: string;
 }
